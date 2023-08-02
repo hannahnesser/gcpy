@@ -19,7 +19,7 @@ from gcpy.plot import compare_single_level, compare_zonal_mean
 from gcpy.regrid import create_regridders
 from gcpy.grid import get_troposphere_mask
 from gcpy.units import convert_units
-import gcpy.constants as gcon
+from gcpy.constants import skip_these_vars
 
 # Save warnings format to undo overwriting built into PyPDF2
 warning_format = warnings.showwarning
@@ -27,10 +27,11 @@ warning_format = warnings.showwarning
 # Suppress numpy divide by zero warnings to prevent output spam
 np.seterr(divide="ignore", invalid="ignore")
 
-# YAML files
-aod_spc = "aod_species.yml"
-emission_spc = "emission_species.yml"
-emission_inv = "emission_inventories.yml"
+# Configuration files (in the gcpy/benchmark/config folder)
+config_dir = get_benchmark_config_dir()
+aod_spc = os.path.join(config_dir, "aod_species.yml")
+emission_spc = os.path.join(config_dir, "emission_species.yml")
+emission_inv = os.path.join(config_dir, "emission_inventories.yml")
 
 
 def create_total_emissions_table(
@@ -45,7 +46,7 @@ def create_total_emissions_table(
         template="Emis{}_",
         refmetdata=None,
         devmetdata=None,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates a table of emissions totals (by sector and by inventory)
@@ -109,7 +110,7 @@ def create_total_emissions_table(
             Default value: None
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config/
 
     Remarks:
         This method is mainly intended for model benchmarking purposes,
@@ -155,7 +156,7 @@ def create_total_emissions_table(
     # this benchmark.py file is found.
     properties = util.read_config_file(
         os.path.join(
-            spcdb_dir, 
+            spcdb_dir,
             "species_database.yml"
         ),
         quiet=True
@@ -228,7 +229,7 @@ def create_total_emissions_table(
         # Push the total variable to the last list element
         # so that it will be printed last of all
         if len(vartot) == 1:
-            varnames.append(varnames.pop(varnames.index(vartot[0])))        
+            varnames.append(varnames.pop(varnames.index(vartot[0])))
 
         # Title strings
         if "Inv" in template:
@@ -375,7 +376,7 @@ def create_global_mass_table(
         trop_only=False,
         outfilename="GlobalMass_TropStrat.txt",
         verbose=False,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates a table of global masses for a list of species in contained in
@@ -418,7 +419,7 @@ def create_global_mass_table(
             Default value: False
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config/
 
     Remarks:
         This method is mainly intended for model benchmarking purposes,
@@ -611,7 +612,7 @@ def create_mass_accumulation_table(
         trop_only=False,
         outfilename="GlobalMassAccum_TropStrat.txt",
         verbose=False,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates a table of global mass accumulation for a list of species in
@@ -662,7 +663,7 @@ def create_mass_accumulation_table(
             Default value: False
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
 
     Remarks:
         This method is mainly intended for model benchmarking purposes,
@@ -912,7 +913,7 @@ def make_benchmark_conc_plots(
         second_ref=None,
         second_dev=None,
         time_mean=False,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates PDF files containing plots of species concentration
@@ -1016,7 +1017,7 @@ def make_benchmark_conc_plots(
             Default value: None
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
         time_mean : bool
             Determines if we should average the datasets over time
             Default value: False
@@ -1043,8 +1044,8 @@ def make_benchmark_conc_plots(
     reader = util.dataset_reader(time_mean, verbose=verbose)
 
     # Open datasets
-    refds = reader(ref, drop_variables=gcon.skip_these_vars).load()
-    devds = reader(dev, drop_variables=gcon.skip_these_vars).load()
+    refds = reader(ref, drop_variables=skip_these_vars).load()
+    devds = reader(dev, drop_variables=skip_these_vars).load()
 
     # Rename SpeciesConc_ to SpeciesConcVV_ for consistency with new
     # naming introduced in GEOS-Chem 14.1.0
@@ -1075,21 +1076,21 @@ def make_benchmark_conc_plots(
     refmetds = None
     devmetds = None
     if refmet:
-        refmetds = reader(refmet, drop_variables=gcon.skip_these_vars).load()
+        refmetds = reader(refmet, drop_variables=skip_these_vars).load()
     if devmet:
-        devmetds = reader(devmet, drop_variables=gcon.skip_these_vars).load()
+        devmetds = reader(devmet, drop_variables=skip_these_vars).load()
 
     # Determine if doing diff-of-diffs
     diff_of_diffs = False
     if second_ref is not None and second_dev is not None:
         diff_of_diffs = True
-   
+
 
     # Open second datasets if passed as arguments (used for diff of diffs)
     # Regrid to same horz grid resolution if two refs or two devs do not match.
     if diff_of_diffs:
-        second_refds = reader(second_ref, drop_variables=gcon.skip_these_vars).load()
-        second_devds = reader(second_dev, drop_variables=gcon.skip_these_vars).load()
+        second_refds = reader(second_ref, drop_variables=skip_these_vars).load()
+        second_devds = reader(second_dev, drop_variables=skip_these_vars).load()
 
         print('\nPrinting second_refds (dev of ref for diff-of-diffs)\n')
         print(second_refds)
@@ -1594,7 +1595,7 @@ def make_benchmark_emis_plots(
         weightsdir='.',
         n_job=-1,
         time_mean=False,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates PDF files containing plots of emissions for model
@@ -1680,7 +1681,7 @@ def make_benchmark_emis_plots(
             Default value: -1
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
         time_mean : bool
             Determines if we should average the datasets over time
             Default value: False
@@ -1718,13 +1719,13 @@ def make_benchmark_emis_plots(
 
     # Ref dataset
     try:
-        refds = reader(ref, drop_variables=gcon.skip_these_vars)
+        refds = reader(ref, drop_variables=skip_these_vars)
     except (OSError, IOError, FileNotFoundError) as e:
         raise e(f"Could not find Ref file: {ref}") from e
 
     # Dev dataset
     try:
-        devds = reader(dev, drop_variables=gcon.skip_these_vars)
+        devds = reader(dev, drop_variables=skip_these_vars)
     except (OSError, IOError, FileNotFoundError) as e:
         raise e(f"Could not find Ref file: {dev}") from e
 
@@ -2008,7 +2009,7 @@ def make_benchmark_emis_tables(
         overwrite=False,
         ref_interval=[2678400.0],
         dev_interval=[2678400.0],
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates a text file containing emission totals by species and
@@ -2059,7 +2060,7 @@ def make_benchmark_emis_tables(
             Default value: [2678400.0]
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
 
     """
 
@@ -2091,27 +2092,27 @@ def make_benchmark_emis_tables(
     devmetds = None
 
     if LooseVersion(xr.__version__) < LooseVersion("0.15.0"):
-        refds = xr.open_mfdataset(reflist, drop_variables=gcon.skip_these_vars)
-        devds = xr.open_mfdataset(devlist, drop_variables=gcon.skip_these_vars)
+        refds = xr.open_mfdataset(reflist, drop_variables=skip_these_vars)
+        devds = xr.open_mfdataset(devlist, drop_variables=skip_these_vars)
         if refmet is not None:
             refmetds = xr.open_mfdataset(
-                refmet, drop_variables=gcon.skip_these_vars)
+                refmet, drop_variables=skip_these_vars)
         if devmet is not None:
             devmetds = xr.open_mfdataset(
-                devmet, drop_variables=gcon.skip_these_vars)
+                devmet, drop_variables=skip_these_vars)
     else:
         # , combine="nested", concat_dim="time")
-        refds = xr.open_mfdataset(reflist, drop_variables=gcon.skip_these_vars)
+        refds = xr.open_mfdataset(reflist, drop_variables=skip_these_vars)
         # , combine="nested", concat_dim="time")
-        devds = xr.open_mfdataset(devlist, drop_variables=gcon.skip_these_vars)
+        devds = xr.open_mfdataset(devlist, drop_variables=skip_these_vars)
         if refmet is not None:
             # , combine="nested", concat_dim="time")
             refmetds = xr.open_mfdataset(
-                refmet, drop_variables=gcon.skip_these_vars)
+                refmet, drop_variables=skip_these_vars)
         if devmet is not None:
             # , combine="nested", concat_dim="time")
             devmetds = xr.open_mfdataset(
-                devmet, drop_variables=gcon.skip_these_vars)
+                devmet, drop_variables=skip_these_vars)
 
     # ==================================================================
     # Create table of emissions
@@ -2201,7 +2202,7 @@ def make_benchmark_jvalue_plots(
         weightsdir='.',
         n_job=-1,
         time_mean=False,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates PDF files containing plots of J-values for model
@@ -2287,7 +2288,7 @@ def make_benchmark_jvalue_plots(
             Default value: -1
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
         time_mean : bool
             Determines if we should average the datasets over time
             Default value: False
@@ -2320,13 +2321,13 @@ def make_benchmark_jvalue_plots(
 
     # Ref dataset
     try:
-        refds = reader(ref, drop_variables=gcon.skip_these_vars)
+        refds = reader(ref, drop_variables=skip_these_vars)
     except (OSError, IOError, FileNotFoundError) as e:
         raise e(f"Could not find Ref file: {ref}") from e
 
     # Dev dataset
     try:
-        devds = reader(dev, drop_variables=gcon.skip_these_vars)
+        devds = reader(dev, drop_variables=skip_these_vars)
     except (OSError, IOError, FileNotFoundError) as e:
         raise e(f"Could not find Ref file: {dev}") from e
 
@@ -2602,7 +2603,7 @@ def make_benchmark_aod_plots(
         weightsdir='.',
         n_job=-1,
         time_mean=False,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates PDF files containing plots of column aerosol optical
@@ -2668,7 +2669,7 @@ def make_benchmark_aod_plots(
             Default value: -1
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
         time_mean : bool
             Determines if we should average the datasets over time
             Default value: False
@@ -2699,13 +2700,13 @@ def make_benchmark_aod_plots(
 
     # Read the Ref dataset
     try:
-        refds = reader(ref, drop_variables=gcon.skip_these_vars)
+        refds = reader(ref, drop_variables=skip_these_vars)
     except (OSError, IOError, FileNotFoundError) as e:
         raise e(f"Could not find Ref file: {ref}") from e
 
     # Read the Dev dataset
     try:
-        devds = reader(dev, drop_variables=gcon.skip_these_vars)
+        devds = reader(dev, drop_variables=skip_these_vars)
     except (OSError, IOError, FileNotFoundError) as e:
         raise e(f"Could not find Ref file: {dev}") from e
 
@@ -2917,7 +2918,7 @@ def make_benchmark_mass_tables(
         overwrite=False,
         verbose=False,
         label="at end of simulation",
-        spcdb_dir=os.path.dirname(__file__),
+        spcdb_dir=config_dir,
         ref_met_extra=None,
         dev_met_extra=None
 ):
@@ -2966,7 +2967,7 @@ def make_benchmark_mass_tables(
             Default value: False.
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
         ref_met_extra: str
             Path to ref Met file containing area data for use with restart files
             which do not contain the Area variable.
@@ -2998,8 +2999,8 @@ def make_benchmark_mass_tables(
     # Read data
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=xr.SerializationWarning)
-        refds = xr.open_dataset(ref, drop_variables=gcon.skip_these_vars)
-        devds = xr.open_dataset(dev, drop_variables=gcon.skip_these_vars)
+        refds = xr.open_dataset(ref, drop_variables=skip_these_vars)
+        devds = xr.open_dataset(dev, drop_variables=skip_these_vars)
 
     # ==================================================================
     # Update GCHP restart dataset (if any)
@@ -3026,7 +3027,7 @@ def make_benchmark_mass_tables(
             ref_area = util.get_area_from_dataset(
                 xr.open_dataset(
                     ref_met_extra,
-                    drop_variables=gcon.skip_these_vars
+                    drop_variables=skip_these_vars
                 )
             )
 
@@ -3037,7 +3038,7 @@ def make_benchmark_mass_tables(
             dev_area = util.get_area_from_dataset(
                 xr.open_dataset(
                     dev_met_extra,
-                    drop_variables=gcon.skip_these_vars
+                    drop_variables=skip_these_vars
                 )
             )
 
@@ -3164,6 +3165,7 @@ def make_benchmark_mass_tables(
     del devds
     gc.collect()
 
+
 def make_benchmark_mass_accumulation_tables(
         ref_start,
         ref_end,
@@ -3179,7 +3181,7 @@ def make_benchmark_mass_accumulation_tables(
         overwrite=False,
         verbose=False,
         label="at end of simulation",
-        spcdb_dir=os.path.dirname(__file__),
+        spcdb_dir=config_dir
 ):
     """
     Creates a text file containing global mass totals by species and
@@ -3237,7 +3239,7 @@ def make_benchmark_mass_accumulation_tables(
             Default value: False.
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
     """
 
     # ==================================================================
@@ -3267,10 +3269,10 @@ def make_benchmark_mass_accumulation_tables(
     # Read data
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=xr.SerializationWarning)
-        refSds = xr.open_dataset(ref_start, drop_variables=gcon.skip_these_vars)
-        refEds = xr.open_dataset(ref_end, drop_variables=gcon.skip_these_vars)
-        devSds = xr.open_dataset(dev_start, drop_variables=gcon.skip_these_vars)
-        devEds = xr.open_dataset(dev_end, drop_variables=gcon.skip_these_vars)
+        refSds = xr.open_dataset(ref_start, drop_variables=skip_these_vars)
+        refEds = xr.open_dataset(ref_end, drop_variables=skip_these_vars)
+        devSds = xr.open_dataset(dev_start, drop_variables=skip_these_vars)
+        devEds = xr.open_dataset(dev_end, drop_variables=skip_these_vars)
 
     # ==================================================================
     # Update GCHP restart dataset if needed
@@ -3515,10 +3517,10 @@ def make_benchmark_oh_metrics(
     # Read data from netCDF into Dataset objects
     # ==================================================================
 
-    refds = xr.open_dataset(ref, drop_variables=gcon.skip_these_vars)
-    devds = xr.open_dataset(dev, drop_variables=gcon.skip_these_vars)
-    refmetds = xr.open_dataset(refmet, drop_variables=gcon.skip_these_vars)
-    devmetds = xr.open_dataset(devmet, drop_variables=gcon.skip_these_vars)
+    refds = xr.open_dataset(ref, drop_variables=skip_these_vars)
+    devds = xr.open_dataset(dev, drop_variables=skip_these_vars)
+    refmetds = xr.open_dataset(refmet, drop_variables=skip_these_vars)
+    devmetds = xr.open_dataset(devmet, drop_variables=skip_these_vars)
 
     # ==================================================================
     # Get tropopause mask
@@ -3709,7 +3711,7 @@ def make_benchmark_wetdep_plots(
         weightsdir='.',
         n_job=-1,
         time_mean=False,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates PDF files containing plots of species concentration
@@ -3773,7 +3775,7 @@ def make_benchmark_wetdep_plots(
             Default value: -1
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
         time_mean : bool
             Determines if we should average the datasets over time
             Default value: False
@@ -3797,16 +3799,16 @@ def make_benchmark_wetdep_plots(
     reader = util.dataset_reader(time_mean, verbose=verbose)
 
     # Open datasets
-    refds = reader(ref, drop_variables=gcon.skip_these_vars)
-    devds = reader(dev, drop_variables=gcon.skip_these_vars)
+    refds = reader(ref, drop_variables=skip_these_vars)
+    devds = reader(dev, drop_variables=skip_these_vars)
 
     # Open met datasets if passed as arguments
     refmetds = None
     devmetds = None
     if refmet is not None:
-        refmetds = reader(refmet, drop_variables=gcon.skip_these_vars)
+        refmetds = reader(refmet, drop_variables=skip_these_vars)
     if devmet is not None:
-        devmetds = reader(devmet, drop_variables=gcon.skip_these_vars)
+        devmetds = reader(devmet, drop_variables=skip_these_vars)
 
     # Compute mean of data over the time dimension (if time_mean=True)
     if time_mean:
@@ -3973,7 +3975,7 @@ def make_benchmark_aerosol_tables(
         dst='./benchmark',
         overwrite=False,
         is_gchp=False,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Compute FullChemBenchmark aerosol budgets & burdens
@@ -4006,7 +4008,7 @@ def make_benchmark_aerosol_tables(
             Default value: False
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
 
     """
 
@@ -4019,7 +4021,7 @@ def make_benchmark_aerosol_tables(
     # Read the species database
     spcdb = util.read_config_file(
         os.path.join(
-            spcdb_dir, 
+            spcdb_dir,
             "species_database.yml"
         ),
         quiet=True
@@ -4061,9 +4063,9 @@ def make_benchmark_aerosol_tables(
             compat='override',
             coords='all')
         ds_spc = xr.open_mfdataset(
-            devlist_spc, drop_variables=gcon.skip_these_vars)
+            devlist_spc, drop_variables=skip_these_vars)
         ds_met = xr.open_mfdataset(
-            devlist_met, drop_variables=gcon.skip_these_vars)
+            devlist_met, drop_variables=skip_these_vars)
     else:
         ds_aer = xr.open_mfdataset(
             devlist_aero,
@@ -4072,10 +4074,10 @@ def make_benchmark_aerosol_tables(
             coords='all')  # ,
         # combine="nested", concat_dim="time")
         ds_spc = xr.open_mfdataset(devlist_spc,
-                                   drop_variables=gcon.skip_these_vars)  # ,
+                                   drop_variables=skip_these_vars)  # ,
         # combine="nested", concat_dim="time")
         ds_met = xr.open_mfdataset(devlist_met,
-                                   drop_variables=gcon.skip_these_vars)  # ,
+                                   drop_variables=skip_these_vars)  # ,
         # combine="nested", concat_dim="time")
 
     # Rename SpeciesConc_ to SpeciesConcVV_ for consistency with new
@@ -4274,7 +4276,7 @@ def make_benchmark_operations_budget(
         species=None,
         overwrite=True,
         verbose=False,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Prints the "operations budget" (i.e. change in mass after
@@ -4345,6 +4347,9 @@ def make_benchmark_operations_budget(
             Set this switch to True if you wish to print out extra
             informational messages.
             Default value: False
+        spcdb_dir: str
+            Directory of species_datbase.yml file
+            Default value: /path/to/gcpy/benchmark/config
     """
 
     # ------------------------------------------
@@ -4408,7 +4413,7 @@ def make_benchmark_operations_budget(
 
     # Read data from disk (either one month or 12 months)
     print('Opening ref and dev data')
-    skip_vars = gcon.skip_these_vars
+    skip_vars = skip_these_vars
     if annual:
         if LooseVersion(xr.__version__) < LooseVersion("0.15.0"):
             ref_ds = xr.open_mfdataset(reffiles, drop_variables=skip_vars)
@@ -4761,7 +4766,7 @@ def make_benchmark_operations_budget(
                 # Get ref and dev mass
 
                 # Get species properties for unit conversion. If none, skip.
-                species_properties = properties.get(spc)                
+                species_properties = properties.get(spc)
                 if species_properties is None:
                     continue
                 else:
@@ -4771,7 +4776,7 @@ def make_benchmark_operations_budget(
 
                 # Specify target units
                 target_units = "Gg"
-                
+
                 # ==============================================================
                 # Convert units of Ref and save to a DataArray
                 # (or skip if Ref contains NaNs everywhere)
@@ -4787,7 +4792,7 @@ def make_benchmark_operations_budget(
                         delta_p=met_and_masks["Ref_Delta_P"],
                         box_height=met_and_masks["Ref_BxHeight"],
                     )
-                
+
                 # ==============================================================
                 # Convert units of Dev and save to a DataArray
                 # (or skip if Dev contains NaNs everywhere)
@@ -4907,7 +4912,7 @@ def make_benchmark_mass_conservation_table(
         dst="./benchmark",
         overwrite=False,
         areapath=None,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates a text file containing global mass of the PassiveTracer
@@ -4942,7 +4947,7 @@ def make_benchmark_mass_conservation_table(
             Default value: None
         spcdb_dir: str
             Path to the species_database.yml
-            Default value: points to gcpy/gcpy folder
+            Default value: /path/to/gcpy/benchmark/config
     """
 
     # ==================================================================
@@ -4985,7 +4990,7 @@ def make_benchmark_mass_conservation_table(
     # Calculate global mass for the tracer at all restart dates
     # ==================================================================
     for f in datafiles:
-        ds = xr.open_dataset(f, drop_variables=gcon.skip_these_vars)
+        ds = xr.open_dataset(f, drop_variables=skip_these_vars)
 
         # Save date in desired format
         #datestr = str(pd.to_datetime(ds.time.values[0]))
@@ -4998,7 +5003,7 @@ def make_benchmark_mass_conservation_table(
             area = util.get_area_from_dataset(
                 xr.open_dataset(
                     areapath,
-                    drop_variables=gcon.skip_these_vars
+                    drop_variables=skip_these_vars
                 )
             )
 
@@ -5180,16 +5185,6 @@ def create_benchmark_summary_table(
             Set this switch to True if you wish to print out extra
             informational messages.
             Default value: False
-        spcdb_dir: str
-            Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
-
-    Remarks:
-        This method is mainly intended for model benchmarking purposes,
-        rather than as a general-purpose tool.
-
-        Species properties (such as molecular weights) are read from a
-        YAML file called "species_database.yml".
     """
 
     # ==================================================================
@@ -5214,7 +5209,7 @@ def create_benchmark_summary_table(
     # Print header to file
     print("#" * 80, file=f)
     print(f"{title1 : <77}{'###'}", file=f)
-    print(f"{'###'  : <77}{'###'}", file=f)   
+    print(f"{'###'  : <77}{'###'}", file=f)
     print(f"{title2 : <77}{'###'}", file=f)
     print(f"{title3 : <77}{'###'}", file=f)
     print("#" * 80, file=f)
@@ -5225,7 +5220,7 @@ def create_benchmark_summary_table(
     # ==================================================================
 
     # Variables to skip
-    skip_vars = gcon.skip_these_vars
+    skip_vars = skip_these_vars
     skip_vars.append("AREA")
 
     # Pick the proper function to read the data
@@ -5341,7 +5336,7 @@ def diff_list_to_text(
     if fancy_format:
         refstr = "Ref"
         devstr = "Dev"
-        
+
     # Strip out duplicates from diff_list
     # Prepare a message about species differences (or alternate msg)
     diff_list = util.unique_values(diff_list, drop=[None])
@@ -5361,7 +5356,7 @@ def diff_list_to_text(
             width=83
         )
         diff_text = f"### {diff_text : <82}{'###'}"
-        
+
     return diff_text.strip()
 
 
@@ -5409,3 +5404,18 @@ def diff_of_diffs_toprow_title(config, model):
         )
 
     return title
+
+
+def get_benchmark_config_dir():
+    """
+    Returns the absolute path to the gcpy/benchmark/config folder.
+    """
+    return os_path.abspath(
+        os.path.dirname(
+            os.path.join(
+                __file__,
+                "..",
+                "config"
+            )
+        )
+    )
