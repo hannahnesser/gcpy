@@ -16,10 +16,14 @@ import numpy as np
 import xarray as xr
 import gcpy.constants as const
 from gcpy.util import make_directory, read_config_file
+from benchmark import get_benchmark_config_dir
 
 # =====================================================================
 # %%% METHODS %%%
 # =====================================================================
+
+# Get the folder where benchmark configuration files are stored
+config_dir = get_benchmark_config_dir()
 
 
 def combine_dataset(file_list=None):
@@ -431,7 +435,7 @@ def make_benchmark_oh_metrics(
         devstr,
         dst="./benchmark",
         overwrite=True,
-        spcdb_dir=os.path.dirname(__file__)
+        spcdb_dir=config_dir
 ):
     """
     Creates a text file containing metrics of global mean OH, MCF lifetime,
@@ -464,7 +468,7 @@ def make_benchmark_oh_metrics(
 
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
     """
     # Tell matplotlib not to look for an X-window
     os.environ["QT_QPA_PLATFORM"] = "offscreen"

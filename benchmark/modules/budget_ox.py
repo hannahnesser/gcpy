@@ -10,12 +10,13 @@ or GCHP benchmark simulations.
 import os
 import warnings
 from calendar import monthrange
+import gc
 import numpy as np
 import xarray as xr
-import gcpy.constants as constants
+from gcpy import constants
 from gcpy.grid import get_troposphere_mask
-import gcpy.util as util
-import gc
+from gcpy import util
+from benchmark import get_benchmark_config_dir
 
 # Suppress harmless run-time warnings (mostly about underflow in division)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -77,12 +78,12 @@ class _GlobVars:
         self.devrstdir = devrstdir
         self.dst = dst
         self.overwrite = overwrite
-        if spcdb_dir is None:
-            spcdb_dir = os.path.dirname(__file__)
-        self.spcdb_dir = spcdb_dir
         self.is_gchp = is_gchp
         self.gchp_res = gchp_res
         self.gchp_is_pre_14_0 = gchp_is_pre_14_0
+        self.spcdb_dir = spcdb_dir
+        if self.spcdb_dir is None:
+            self.spcdb_dir = get_benchmark_config_dir()
 
         # ---------------------------------------------------------------
         # Benchmark year
@@ -359,7 +360,7 @@ def init_and_final_mass(
     g100 = 100.0 / constants.G
     airmass_ini = (deltap_ini * globvars.area_m2.values) * g100
     airmass_end = (deltap_end * globvars.area_m2.values) * g100
-    
+
     # Conversion factors
     mw_ratio = globvars.mw["O3"] / globvars.mw["Air"]
     kg_to_tg = 1.0e-9
@@ -463,11 +464,11 @@ def annual_average_drydep(
     mw_avo = (globvars.mw["Ox"] / constants.AVOGADRO)
     kg_to_tg = 1.0e-9
     area_cm2 = globvars.area_cm2.values
-    
+
     # Get drydep flux of Ox [molec/cm2/s]
     dry = globvars.ds_dry["DryDep_Ox"].values
 
-    # Convert to Tg Ox 
+    # Convert to Tg Ox
     dry_tot = 0.0
     for t in range(globvars.N_MONTHS):
         dry_tot += np.nansum(dry[t, :, :] * area_cm2) * globvars.frac_of_a[t]

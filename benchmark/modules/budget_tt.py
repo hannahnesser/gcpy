@@ -13,12 +13,13 @@ import os
 from glob import glob
 import warnings
 from calendar import monthrange
+import gc
 import numpy as np
 import xarray as xr
-import gcpy.constants as constants
+from gcpy import constants
 from gcpy.grid import get_troposphere_mask
-import gcpy.util as util
-import gc
+from gcpy import util
+from benchmark import get_benchmark_config_dir
 
 # Suppress harmless run-time warnings (mostly about underflow in division)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -292,6 +293,9 @@ class _GlobVars:
         self.species_list = ["Pb210", "Be7", "Be10"]
 
         # Read the species database
+        # Default location: gcpy/benchmark/config folder
+        if spcdb_dir is None:
+           spcdb_dir = get_benchmark_config_dir()
         path = os.path.join(spcdb_dir, "species_database.yml")
         spcdb = util.read_config_file(path)
 
