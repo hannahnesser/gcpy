@@ -46,12 +46,12 @@ import warnings
 from datetime import datetime
 import numpy as np
 from gcpy.util import get_filepath, read_config_file
-import gcpy.ste_flux as ste
-import gcpy.oh_metrics as oh
-import gcpy.benchmark as bmk
 from gcpy.date_time import add_months, is_full_year
-from modules.run_1yr_fullchem_benchmark import run_benchmark as run_1yr_benchmark
-from modules.run_1yr_tt_benchmark import run_benchmark as run_1yr_tt_benchmark
+from benchmark.modules.run_1yr_fullchem_benchmark \
+    import run_benchmark as run_1yr_benchmark
+from benchmark.modules.run_1yr_tt_benchmark \
+    import run_benchmark as run_1yr_tt_benchmark
+import benchmark.modules as bmk
 
 # Tell matplotlib not to look for an X-window
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -245,7 +245,7 @@ def run_benchmark_default(config):
                 dest = os.path.join(resdir, curfile.split("/")[-1])
                 if os.path.exists(dest):
                     copyfile(curfile, dest)
-                    
+
     gcc_vs_gcc_tablesdir = os.path.join(
         gcc_vs_gcc_resultsdir,
         config["options"]["comparisons"]["gcc_vs_gcc"]["tables_subdir"],
@@ -271,7 +271,7 @@ def run_benchmark_default(config):
     gchp_vs_gchp_devstr = config["data"]["dev"]["gchp"]["version"]
     diff_of_diffs_refstr = bmk.diff_of_diffs_toprow_title(config, "gcc")
     diff_of_diffs_devstr = bmk.diff_of_diffs_toprow_title(config, "gchp")
-    
+
     ########################################################################
     ###    THE REST OF THESE SETTINGS SHOULD NOT NEED TO BE CHANGED      ###
     ########################################################################
@@ -622,7 +622,7 @@ def run_benchmark_default(config):
             dev = get_filepath(gcc_vs_gcc_devdir, "Metrics", gcc_dev_date)
 
             # Create table
-            oh.make_benchmark_oh_metrics(
+            bmk.make_benchmark_oh_metrics(
                 ref,
                 config["data"]["ref"]["gcc"]["version"],
                 dev,
@@ -644,7 +644,7 @@ def run_benchmark_default(config):
             # Compute monthly and annual average strat-trop exchange of O3
             # only run if comparison is exactly 1 month
             if add_months(gcc_dev_date, 1) == gcc_end_dev_date:
-                ste.make_benchmark_ste_table(
+                bmk.make_benchmark_ste_table(
                     config["data"]["dev"]["gcc"]["version"],
                     dev,
                     gcc_dev_date.astype(datetime).year,
@@ -660,17 +660,6 @@ def run_benchmark_default(config):
         # ==================================================================
         if config["options"]["outputs"]["summary_table"]:
             print("\n%%% Creating GCC vs. GCC summary table %%%")
-
-            # Diagnostic collections to check
-            collections = [
-                'AerosolMass',
-                'Aerosols',
-                'Emissions',
-                'JValues',
-                'Metrics',
-                'SpeciesConc',
-                'StateMet',
-            ]
 
             # Print summary of which collections are identical
             # between Ref & Dev, and which are not identical.
@@ -814,7 +803,7 @@ def run_benchmark_default(config):
                 overwrite=True,
                 sigdiff_files=gchp_vs_gcc_sigdiff,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]                
+                n_job=config["options"]["n_cores"]
             )
 
         # ==================================================================
@@ -845,7 +834,6 @@ def run_benchmark_default(config):
                 overwrite=True,
                 devmet=devmet,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]                
             )
 
         # ==================================================================
@@ -874,7 +862,7 @@ def run_benchmark_default(config):
                 overwrite=True,
                 sigdiff_files=gchp_vs_gcc_sigdiff,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]                
+                n_job=config["options"]["n_cores"]
             )
 
         # ==================================================================
@@ -903,7 +891,7 @@ def run_benchmark_default(config):
                 overwrite=True,
                 sigdiff_files=gchp_vs_gcc_sigdiff,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]                
+                n_job=config["options"]["n_cores"]
             )
 
         # ==================================================================
@@ -1047,7 +1035,7 @@ def run_benchmark_default(config):
             )
 
             # Create table
-            oh.make_benchmark_oh_metrics(
+            bmk.make_benchmark_oh_metrics(
                 ref,
                 gchp_vs_gcc_refstr,
                 dev,
@@ -1187,7 +1175,7 @@ def run_benchmark_default(config):
                 overwrite=True,
                 sigdiff_files=gchp_vs_gchp_sigdiff,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]                
+                n_job=config["options"]["n_cores"]
             )
 
         # ==================================================================
@@ -1226,7 +1214,7 @@ def run_benchmark_default(config):
                 overwrite=True,
                 sigdiff_files=gchp_vs_gchp_sigdiff,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]                
+                n_job=config["options"]["n_cores"]
             )
 
         # ==================================================================
@@ -1296,7 +1284,7 @@ def run_benchmark_default(config):
                 overwrite=True,
                 sigdiff_files=gchp_vs_gchp_sigdiff,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]                
+                n_job=config["options"]["n_cores"]
             )
 
         # ==================================================================
@@ -1330,7 +1318,7 @@ def run_benchmark_default(config):
                 overwrite=True,
                 sigdiff_files=gchp_vs_gchp_sigdiff,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]                
+                n_job=config["options"]["n_cores"]
             )
 
         # ==================================================================
@@ -1493,7 +1481,7 @@ def run_benchmark_default(config):
             )
 
             # Create table
-            oh.make_benchmark_oh_metrics(
+            bmk.make_benchmark_oh_metrics(
                 ref,
                 config["data"]["ref"]["gchp"]["version"],
                 dev,
@@ -1530,7 +1518,7 @@ def run_benchmark_default(config):
                     'Emissions',
                     'JValues',
                     'Metrics',
-                    'SpeciesConc', 
+                    'SpeciesConc',
                     'StateMet',
                 ],
                 dst=gchp_vs_gchp_tablesdir,
@@ -1581,7 +1569,7 @@ def run_benchmark_default(config):
                 second_dev=gchp_dev,
                 cats_in_ugm3=None,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]                
+                n_job=config["options"]["n_cores"]
             )
 
 

@@ -24,6 +24,8 @@ import xarray as xr
 from gcpy.constants import skip_these_vars
 from gcpy.util import verify_variable_type, dataset_reader, make_directory
 from gcpy.cstools import extract_grid, find_index, is_cubed_sphere
+from benchmark import get_benchmark_config_dir
+
 
 def read_nas(
         input_file,
@@ -488,7 +490,7 @@ def get_geoschem_level_metadata(
     -----
     filename : str
         Name of the comma-separated variable to read.
-        Default value: "__file__/GC_72_vertical_levels.csv"
+        Default: /path/to/gcpy/benchmark/config/GC_72_vertical_levels.csv
 
     Keyword Args:
     -------------
@@ -506,8 +508,8 @@ def get_geoschem_level_metadata(
         Metadata for each of the GEOS-Chem vertical levels.
     """
     if filename is None:
-        filename = os.path.join(
-            os.path.dirname(__file__),
+        filename =os.path.join(
+            get_benchmark_config_dir(),
             "GC_72_vertical_levels.csv"
         )
 
@@ -534,7 +536,6 @@ def prepare_data_for_plot(
         dev_cs_grid,
         gc_level_alts_m,
         varname="SpeciesConcVV_O3",
-        **kwargs,
 ):
     """
     Prepares data for passing to routine plot_single_frames as follows:
@@ -658,7 +659,6 @@ def plot_single_station(
         ref_label,
         dev_series,
         dev_label,
-        **kwargs
 ):
     """
     Plots observation data vs. model data at a single station site.

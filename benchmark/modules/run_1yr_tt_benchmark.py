@@ -57,9 +57,7 @@ from calendar import monthrange
 import numpy as np
 from joblib import Parallel, delayed
 from gcpy.util import get_filepath, get_filepaths
-from gcpy import benchmark as bmk
-import gcpy.budget_tt as ttbdg
-import gcpy.ste_flux as ste
+from benchmark import modules as bmk
 
 # Tell matplotlib not to look for an X-window
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -486,7 +484,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
         # ==================================================================
         if config["options"]["outputs"]["rnpbbe_budget"]:
             print("\n%%% Creating GCC vs. GCC radionuclides budget table %%%")
-            ttbdg.transport_tracers_budgets(
+            bmk.transport_tracers_budgets(
                 config["data"]["dev"]["gcc"]["dir"],
                 gcc_vs_gcc_devdir,
                 gcc_vs_gcc_devrstdir,
@@ -593,7 +591,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             )[0]
 
             # Make stat-trop exchange table for subset of species
-            ste.make_benchmark_ste_table(
+            bmk.make_benchmark_ste_table(
                 config["data"]["dev"]["gcc"]["dir"],
                 devs,
                 int(bmk_year_dev),
@@ -772,7 +770,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
         # ==================================================================
         if config["options"]["outputs"]["rnpbbe_budget"]:
             print("\n%%% Creating GCHP vs. GCC radionuclides budget table %%%")
-            ttbdg.transport_tracers_budgets(
+            bmk.transport_tracers_budgets(
                 config["data"]["dev"]["gchp"]["dir"],
                 gchp_vs_gcc_devdir,
                 gchp_vs_gcc_devrstdir,
@@ -823,6 +821,27 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
                     gchp_is_pre_14_0=config["data"]["dev"]["gchp"][
                         "is_pre_14.0"]
                 )
+
+                # Create tables
+                bmk.make_benchmark_mass_tables(
+                    refpath,
+                    gchp_vs_gcc_refstr,
+                    devpath,
+                    gchp_vs_gcc_devstr,
+                    dst=gchp_vs_gcc_tablesdir,
+                    subdst=bmk_mon_yr_strs_dev[mon],
+                    label=f"at 01{bmk_mon_yr_strs_dev[mon]}",
+                    overwrite=True,
+                    spcdb_dir=spcdb_dir,
+                    dev_met_extra=devareapath
+                )
+
+            # Run in parallel
+            results = Parallel(n_jobs=-1)(
+                delayed(gchp_vs_gcc_mass_table)(mon) \
+                for mon in range(bmk_n_months)
+            )
+
 
         # ==================================================================
         # GCHP vs GCC operations budgets tables
@@ -935,7 +954,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
                 restrict_cats=restrict_cats,
                 overwrite=True,
                 spcdb_dir=spcdb_dir,
-                cmpres=cmpres
+                cmpres=cmpres,
                 n_job=config["options"]["n_cores"]
             )
 
@@ -959,7 +978,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
                     restrict_cats=restrict_cats,
                     overwrite=True,
                     spcdb_dir=spcdb_dir,
-                    cmpres=cmpres
+                    cmpres=cmpres,
                     n_job=config["options"]["n_cores"]
                 )
 
@@ -1010,7 +1029,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
                     benchmark_type=bmk_type,
                     normalize_by_area=True,
                     spcdb_dir=spcdb_dir,
-                    cmpres=cmpres
+                    cmpres=cmpres,
                     n_job=config["options"]["n_cores"]
                 )
 
@@ -1034,7 +1053,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
                         benchmark_type=bmk_type,
                         normalize_by_area=True,
                         spcdb_dir=spcdb_dir,
-                        cmpres=cmpres
+                        cmpres=cmpres,
                         n_job=config["options"]["n_cores"]
                     )
 
@@ -1043,7 +1062,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
         # ==================================================================
         if config["options"]["outputs"]["rnpbbe_budget"]:
             print("\n%%% Creating GCHP vs. GCHP radionuclides budget table %%%")
-            ttbdg.transport_tracers_budgets(
+            bmk.transport_tracers_budgets(
                 config["data"]["dev"]["gchp"]["dir"],
                 gchp_vs_gchp_devdir,
                 gchp_vs_gchp_devrstdir,

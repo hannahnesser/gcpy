@@ -58,11 +58,7 @@ from calendar import monthrange
 import numpy as np
 from joblib import Parallel, delayed
 from gcpy.util import get_filepath, get_filepaths
-import gcpy.ste_flux as ste
-import gcpy.oh_metrics as oh
-import gcpy.budget_ox as ox
-from gcpy import benchmark as bmk
-import modules.benchmark_models_vs_obs as mvo
+from benchmark import modules as bmk
 
 # Tell matplotlib not to look for an X-window
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -530,7 +526,6 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
                 dev_interval=sec_per_month_dev,
                 overwrite=True,
                 spcdb_dir=spcdb_dir,
-                n_job=config["options"]["n_cores"]
             )
 
         # ==================================================================
@@ -772,7 +767,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
         # ==================================================================
         if config["options"]["outputs"]["Ox_budget_table"]:
             print("\n%%% Creating GCC vs. GCC Ox budget table %%%")
-            ox.global_ox_budget(
+            bmk.global_ox_budget(
                 config["data"]["dev"]["gcc"]["version"],
                 gcc_vs_gcc_devdir,
                 gcc_vs_gcc_devrstdir,
@@ -796,7 +791,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             )[0]
 
             # Compute table
-            ste.make_benchmark_ste_table(
+            bmk.make_benchmark_ste_table(
                 config["data"]["dev"]["gcc"]["version"],
                 dev,
                 bmk_year_dev,
@@ -825,7 +820,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             )[0]
 
             # Create the OH Metrics table
-            oh.make_benchmark_oh_metrics(
+            bmk.make_benchmark_oh_metrics(
                 ref,
                 config["data"]["ref"]["gcc"]["version"],
                 dev,
@@ -854,7 +849,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             )[0]
 
             # Plot models vs. observations (O3 for now)
-            mvo.make_benchmark_models_vs_obs_plots(
+            bmk.make_benchmark_models_vs_obs_plots(
                 config["paths"]["obs_data_dir"],
                 ref,
                 config["data"]["ref"]["gcc"]["version"],
@@ -1335,7 +1330,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             print("\n%%% Creating GCHP vs. GCC Ox budget tables %%%")
 
             # Compute Ox budget table for GCC
-            ox.global_ox_budget(
+            bmk.global_ox_budget(
                 config["data"]["dev"]["gcc"]["version"],
                 gcc_vs_gcc_devdir,
                 gcc_vs_gcc_devrstdir,
@@ -1346,7 +1341,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             )
 
             # Compute Ox budget table for GCHP
-            ox.global_ox_budget(
+            bmk.global_ox_budget(
                 config["data"]["dev"]["gchp"]["version"],
                 gchp_vs_gcc_devdir,
                 gchp_vs_gcc_devrstdir,
@@ -1379,7 +1374,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             )[0]
 
             # Create table
-            oh.make_benchmark_oh_metrics(
+            bmk.make_benchmark_oh_metrics(
                 ref,
                 config["data"]["dev"]["gcc"]["version"],
                 dev,
@@ -1415,7 +1410,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             )[0]
 
             # Plot models vs. observations (O3 for now)
-            mvo.make_benchmark_models_vs_obs_plots(
+            bmk.make_benchmark_models_vs_obs_plots(
                 config["paths"]["obs_data_dir"],
                 ref,
                 config["data"]["dev"]["gcc"]["version"],
@@ -1935,7 +1930,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             print("\n%%% Creating GCHP Ox budget table %%%")
 
             # Compute Ox budget table for GCHP
-            ox.global_ox_budget(
+            bmk.global_ox_budget(
                 config["data"]["dev"]["gchp"]["version"],
                 gchp_vs_gchp_devdir,
                 gchp_vs_gchp_devrstdir,
@@ -1969,7 +1964,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             )[0]
 
             # Create the OH Metrics table
-            oh.make_benchmark_oh_metrics(
+            bmk.make_benchmark_oh_metrics(
                 ref,
                 config["data"]["ref"]["gchp"]["version"],
                 dev,
@@ -2006,7 +2001,7 @@ def run_benchmark(config, bmk_year_ref, bmk_year_dev):
             )[0]
 
             # Plot models vs. observations (O3 for now)
-            mvo.make_benchmark_models_vs_obs_plots(
+            bmk.make_benchmark_models_vs_obs_plots(
                 config["paths"]["obs_data_dir"],
                 ref,
                 config["data"]["ref"]["gchp"]["version"],
