@@ -45,6 +45,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Now pass `n_job=config["options"]["n_cores"]` to benchmark plotting routines
 - Moved benchmark config files from  `gcpy/` to  the `benchmark/config/` folder
 - Updated `gcpy/__init__.py` to account for files that have been added or moved
+- Moved `GC_72_vertical_levels.csv` from `benchmark/modules/` to `benchmark/config/`
+- Moved `benchmark/modules/species_database.yml` to `benchmark/config/species_database.yml`
 
 ### Fixed
 - Generalized test for GCHP or GCClassic restart file in `regrid_restart_file.py`
