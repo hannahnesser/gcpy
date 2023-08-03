@@ -24,8 +24,7 @@ import xarray as xr
 from gcpy.constants import skip_these_vars
 from gcpy.util import verify_variable_type, dataset_reader, make_directory
 from gcpy.cstools import extract_grid, find_index, is_cubed_sphere
-from benchmark import get_benchmark_config_dir
-
+from benchmark_config_files import CONFIG_DIR
 
 def read_nas(
         input_file,
@@ -508,8 +507,8 @@ def get_geoschem_level_metadata(
         Metadata for each of the GEOS-Chem vertical levels.
     """
     if filename is None:
-        filename =os.path.join(
-            get_benchmark_config_dir(),
+        filename = os.path.join(
+            CONFIG_DIR,
             "GC_72_vertical_levels.csv"
         )
 

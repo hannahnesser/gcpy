@@ -18,8 +18,10 @@ import numpy as np
 import xarray as xr
 from gcpy import constants
 from gcpy.grid import get_troposphere_mask
-from gcpy import util
-from benchmark import get_benchmark_config_dir
+from gcpy import util as gcpy_util
+import benchmark_util as bmk_util
+from benchmark_config_files import CONFIG_DIR
+
 
 # Suppress harmless run-time warnings (mostly about underflow in division)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -75,6 +77,11 @@ class _GlobVars:
         self.gchp_is_pre_14_0 = gchp_is_pre_14_0
         self.overwrite = overwrite
 
+        # Look for species database in gcpy/benchmark/config
+        # folder if no value is passed for spcdb_dir
+        if spcdb_dir is None:
+            spcdb_dir = CONFIG_DIR
+        
         # ------------------------------
         # Benchmark year
         # ------------------------------
@@ -88,7 +95,7 @@ class _GlobVars:
         # ------------------------------
 
         # Initial restart file
-        RstInit = util.get_filepath(
+        RstInit = bmk_util.get_filepath(
             self.devrstdir,
             "Restart",
             np.datetime64(f"{self.y0_str}-01-01T00:00:00"),
@@ -98,7 +105,7 @@ class _GlobVars:
         )
 
         # Final restart file
-        RstFinal = util.get_filepath(
+        RstFinal = bmk_util.get_filepath(
             self.devrstdir,
             "Restart",
             np.datetime64(f"{self.y1_str}-01-01T00:00:00"),
@@ -186,8 +193,8 @@ class _GlobVars:
         # vertical axis.  Also test if the restart files have the BXHEIGHT
         # variable contained within them.
         if is_gchp:
-            self.ds_ini = util.rename_and_flip_gchp_rst_vars(self.ds_ini)
-            self.ds_end = util.rename_and_flip_gchp_rst_vars(self.ds_end)
+            self.ds_ini = gcpy_util.rename_and_flip_gchp_rst_vars(self.ds_ini)
+            self.ds_end = gcpy_util.rename_and_flip_gchp_rst_vars(self.ds_end)
 
         # Diagnostics
         self.ds_dcy = xr.open_mfdataset(
@@ -258,7 +265,7 @@ class _GlobVars:
                 msg = 'Could not find Met_AREAM2 in StateMet_avg collection!'
                 raise ValueError(msg)
             area_m2 = self.ds_met["Met_AREAM2"].isel(time=0)
-            area_m2 = util.reshape_MAPL_CS(area_m2)
+            area_m2 = gcpy_util.reshape_MAPL_CS(area_m2)
             self.area_m2 = area_m2
             self.area_cm2 = self.ds_met["Met_AREAM2"] * 1.0e4
         else:
@@ -291,13 +298,8 @@ class _GlobVars:
 
         # List of species (and subsets for the trop & strat)
         self.species_list = ["Pb210", "Be7", "Be10"]
-
-        # Read the species database
-        # Default location: gcpy/benchmark/config folder
-        if spcdb_dir is None:
-           spcdb_dir = get_benchmark_config_dir()
         path = os.path.join(spcdb_dir, "species_database.yml")
-        spcdb = util.read_config_file(path)
+        spcdb = gcpy_util.read_config_file(path)
 
         # Molecular weights [g mol-1], as taken from the species database
         self.mw = {}
@@ -873,7 +875,7 @@ def transport_tracers_budgets(
     )
 
     # Take the difference final - init
-    data["accum_diff"] = util.dict_diff(
+    data["accum_diff"] = gcpy_util.dict_diff(
         data["accum_init"],
         data["accum_final"]
     )
@@ -935,7 +937,7 @@ def transport_tracers_budgets(
     )
 
     # Sources - sinks
-    data["src_minus_snk"] = util.dict_diff(
+    data["src_minus_snk"] = gcpy_util.dict_diff(
         data["snk_total"],
         data["src_total"]
     )

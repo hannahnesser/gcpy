@@ -16,15 +16,11 @@ import numpy as np
 import xarray as xr
 import gcpy.constants as const
 from gcpy.util import make_directory, read_config_file
-from benchmark import get_benchmark_config_dir
+from benchmark_config_files import CONFIG_DIR
 
 # =====================================================================
 # %%% METHODS %%%
 # =====================================================================
-
-# Get the folder where benchmark configuration files are stored
-config_dir = get_benchmark_config_dir()
-
 
 def combine_dataset(file_list=None):
     """
@@ -218,12 +214,16 @@ def init_common_vars(ref, refstr, dev, devstr, spcdb_dir):
 
         spcdb_dir: str
             Directory of species_datbase.yml file
-            Default value: Directory of GCPy code repository
+            Default value: /path/to/gcpy/benchmark/config
 
     Returns:
         common_vars: dict
     """
 
+    # Default
+    if spcdb_dir is None:
+        spcdb_dir = CONFIG_DIR
+    
     # Get species database
     spcdb = read_config_file(
         os.path.join(
@@ -435,7 +435,7 @@ def make_benchmark_oh_metrics(
         devstr,
         dst="./benchmark",
         overwrite=True,
-        spcdb_dir=config_dir
+        spcdb_dir=None
 ):
     """
     Creates a text file containing metrics of global mean OH, MCF lifetime,
@@ -470,6 +470,18 @@ def make_benchmark_oh_metrics(
             Directory of species_datbase.yml file
             Default value: /path/to/gcpy/benchmark/config
     """
+
+    # Look for spcdb_dir in the gcpy/benchmark/config
+    # folder if spcdb_dir is not passed as an argument
+    if spcdb_dir is None:
+        spcdb_dir = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "..",
+                "config"
+            )
+        )
+
     # Tell matplotlib not to look for an X-window
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
