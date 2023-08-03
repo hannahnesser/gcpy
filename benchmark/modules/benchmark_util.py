@@ -1027,7 +1027,7 @@ def archive_config_file(
     copy = os.path.join(dst, orig_basename)
     if not os.path.exists(copy):
         print(f"\nArchiving {orig_basename} in {dst}")
-        shutil.copyfile(config_file, copy)
+        shutil.copyfile(config_file_path, copy)
 
 
 def add_lumped_species_to_dataset(
