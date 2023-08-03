@@ -14,12 +14,14 @@ import sparselt.esmf
 import sparselt.xr
 from joblib import Parallel, delayed
 from tabulate import tabulate
-from gcpy import util
+from gcpy import util as gcpy_util
 from gcpy.plot import compare_single_level, compare_zonal_mean
 from gcpy.regrid import create_regridders
 from gcpy.grid import get_troposphere_mask
 from gcpy.units import convert_units
-from gcpy.constants import skip_these_vars
+from gcpy.constants import MW_AIR_g, skip_these_vars
+import benchmark_config_files as bcf
+import benchmark_util as bmk_util
 
 # Save warnings format to undo overwriting built into PyPDF2
 warning_format = warnings.showwarning
@@ -27,12 +29,9 @@ warning_format = warnings.showwarning
 # Suppress numpy divide by zero warnings to prevent output spam
 np.seterr(divide="ignore", invalid="ignore")
 
-# Configuration files (in the gcpy/benchmark/config folder)
-config_dir = get_benchmark_config_dir()
-aod_spc = os.path.join(config_dir, "aod_species.yml")
-emission_spc = os.path.join(config_dir, "emission_species.yml")
-emission_inv = os.path.join(config_dir, "emission_inventories.yml")
-
+# ======================================================================
+# %%%%% METHODS %%%%%
+# ======================================================================
 
 def create_total_emissions_table(
         refdata,
@@ -41,12 +40,12 @@ def create_total_emissions_table(
         devstr,
         species,
         outfilename,
-        ref_interval=[2678400.0],
-        dev_interval=[2678400.0],
+        ref_interval=None,
+        dev_interval=None,
         template="Emis{}_",
         refmetdata=None,
         devmetdata=None,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates a table of emissions totals (by sector and by inventory)
@@ -123,12 +122,11 @@ def create_total_emissions_table(
     # ==================================================================
     # Initialization
     # ==================================================================
-
-    # Make sure refdata and devdata are both xarray Dataset objects
-    if not isinstance(refdata, xr.Dataset):
-        raise TypeError("The refdata argument must be an xarray Dataset!")
-    if not isinstance(devdata, xr.Dataset):
-        raise TypeError("The devdata argument must be an xarray Dataset!")
+    gcpy_util.verify_variable_type(refdata, xr.Dataset)
+    gcpy_util.verify_variable_type(refstr, str)
+    gcpy_util.verify_variable_type(devdata, xr.Dataset)
+    gcpy_util.verify_variable_type(devstr, str)
+    gcpy_util.verify_variable_type(species, dict)
 
     # Get ref area [m2]
     if "AREA" in refdata.data_vars.keys():
@@ -150,11 +148,17 @@ def create_total_emissions_table(
               "dataset containing Met_AREAM2 is not passed!"
         raise ValueError(msg)
 
+    # Set defaults for the ref & dev interval in seconds
+    if ref_interval is None:
+        ref_interval=[2678400.0]
+    if dev_interval is None:
+        dev_interval=[2678400.0]
+
     # Load a YAML file containing species properties (such as
     # molecular weights), which we will need for unit conversions.
     # This is located in the "data" subfolder of this folder where
     # this benchmark.py file is found.
-    properties = util.read_config_file(
+    properties = gcpy_util.read_config_file(
         os.path.join(
             spcdb_dir,
             "species_database.yml"
@@ -169,11 +173,18 @@ def create_total_emissions_table(
     # Make sure that Ref and Dev datasets have the same variables.
     # Variables that are in Ref but not in Dev will be added to Dev
     # with all missing values (NaNs). And vice-versa.
-    [refdata, devdata] = util.add_missing_variables(refdata, devdata)
+    [refdata, devdata] = bmk_util.add_missing_variables(
+        refdata,
+        devdata
+    )
 
     # Find all common variables between the two datasets
     # and get the lists of variables only in Ref and only in Dev,
-    vardict = util.compare_varnames(refdata, devdata, quiet=True)
+    vardict = bmk_util.compare_varnames(
+        refdata,
+        devdata,
+        quiet=True
+    )
     cvars = vardict["commonvars"]
     refonly = vardict["refonly"]
     devonly = vardict["devonly"]
@@ -183,14 +194,14 @@ def create_total_emissions_table(
     # =================================================================
     # Create file
     try:
-        f = open(outfilename, "w")
-    except (IOError, OSError, FileNotFoundError) as e:
-        raise e(f"Could not open {outfilename} for writing!") from e
+        ofile = open(outfilename, "w", encoding="UTF-8")
+    except (IOError, OSError, FileNotFoundError) as exc:
+        raise exc(f"Could not open {outfilename} for writing!") from exc
 
     # Write a placeholder to the file that denotes where
     # the list of species with differences will be written
     placeholder = "@%% insert diff status here %%@"
-    print(f"{placeholder}\n\n", file=f)
+    print(f"{placeholder}\n\n", file=ofile)
 
     # Define a list for differences
     diff_list = []
@@ -202,16 +213,19 @@ def create_total_emissions_table(
 
         # Get a list of emission variable names for each species
         diagnostic_template = template.replace("{}", species_name)
-        varnames = util.get_emissions_varnames(cvars, diagnostic_template)
+        varnames = bmk_util.get_emissions_varnames(
+            cvars,
+            diagnostic_template
+        )
 
         # Also add variables that might be in either Ref or Dev
         # but not the other.  This will allow us to print totals
         # for all species (and print NaN for the missing ones).
         if len(refonly) > 0:
-            matching = [v for v in refonly if diagnostic_template in v]
+            matching = [var for var in refonly if diagnostic_template in var]
             varnames = varnames + matching
         if len(devonly) > 0:
-            matching = [v for v in devonly if diagnostic_template in v]
+            matching = [var for var in devonly if diagnostic_template in var]
             varnames = varnames + matching
 
         # Sort the list again  to account for new variables added above
@@ -224,7 +238,7 @@ def create_total_emissions_table(
             continue
 
         # Check if there is a total emissions variable in the list
-        vartot = [v for v in varnames if "_TOTAL" in v.upper()]
+        vartot = [var for var in varnames if "_TOTAL" in var.upper()]
 
         # Push the total variable to the last list element
         # so that it will be printed last of all
@@ -245,21 +259,21 @@ def create_total_emissions_table(
         title3 = f"### Dev = {devstr}"
 
         # Print header to file
-        print("#" * 89, file=f)
-        print(f"{title1 : <86}{'###'}", file=f)
-        print(f"{title2 : <86}{'###'}", file=f)
-        print(f"{title3 : <86}{'###'}", file=f)
-        print("#" * 89, file=f)
-        print(f"{'' : <19}{'Ref' : >20}{'Dev' : >20}{'Dev - Ref' : >14}{'% diff' : >10} {'diffs'}", file=f)
+        print("#" * 89, file=ofile)
+        print(f"{title1 : <86}{'###'}", file=ofile)
+        print(f"{title2 : <86}{'###'}", file=ofile)
+        print(f"{title3 : <86}{'###'}", file=ofile)
+        print("#" * 89, file=ofile)
+        print(f"{'' : <19}{'Ref' : >20}{'Dev' : >20}{'Dev - Ref' : >14}{'% diff' : >10} {'diffs'}", file=ofile)
 
         # =============================================================
         # Loop over all emissions variables corresponding to this
         # species and print their totals in Ref and Dev to the file.
         # =============================================================
-        for v in varnames:
+        for var in varnames:
 
             if "Inv" in template:
-                spc_name = v.split("_")[1]
+                spc_name = var.split("_")[1]
             else:
                 spc_name = species_name
 
@@ -273,11 +287,11 @@ def create_total_emissions_table(
 
             # Convert units of Ref and Dev and save to numpy ndarray objects
             # (or set to NaN if the variable is not found in Ref or Dev)
-            if v in refonly and v not in devonly:
+            if var in refonly and var not in devonly:
 
                 # Convert units of Ref
                 refarray = convert_units(
-                    refdata[v],
+                    refdata[var],
                     spc_name,
                     species_properties,
                     target_units,
@@ -286,18 +300,18 @@ def create_total_emissions_table(
                 )
 
                 # Set Dev to NaN (missing values) everywhere
-                devarray = util.create_blank_dataarray(
-                    name=refdata[v].name,
+                devarray = gcpy_util.create_blank_dataarray(
+                    name=refdata[var].name,
                     sizes=devdata.sizes,
                     coords=devdata.coords,
-                    attrs=refdata[v].attrs,
+                    attrs=refdata[var].attrs,
                 )
 
-            elif v in devonly and v not in refonly:
+            elif var in devonly and var not in refonly:
 
                 # Convert units of Dev
                 devarray = convert_units(
-                    devdata[v],
+                    devdata[var],
                     spc_name,
                     species_properties,
                     target_units,
@@ -306,18 +320,18 @@ def create_total_emissions_table(
                 )
 
                 # Set Ref to NaN (missing values) everywhere
-                refarray = util.create_blank_dataarray(
-                    name=devdata[v].name,
+                refarray = gcpy_util.create_blank_dataarray(
+                    name=devdata[var].name,
                     sizes=refdata.sizes,
                     coords=refdata.coords,
-                    attrs=devdata[v].attrs,
+                    attrs=devdata[var].attrs,
                 )
 
             else:
 
                 # Convert units of both Ref and Dev
                 refarray = convert_units(
-                    refdata[v],
+                    refdata[var],
                     spc_name,
                     species_properties,
                     target_units,
@@ -325,7 +339,7 @@ def create_total_emissions_table(
                     area_m2=refarea,
                 )
                 devarray = convert_units(
-                    devdata[v],
+                    devdata[var],
                     spc_name,
                     species_properties,
                     target_units,
@@ -336,29 +350,29 @@ def create_total_emissions_table(
             # ==========================================================
             # Print emission totals for Ref and Dev
             # ==========================================================
-            util.print_totals(
+            bmk_util.print_totals(
                 refarray,
                 devarray,
-                f,
+                ofile,
                 diff_list
             )
 
         # Add newlines before going to the next species
-        print(file=f)
-        print(file=f)
+        print(file=ofile)
+        print(file=ofile)
 
     # =================================================================
     # Cleanup and quit
     # =================================================================
 
     # Close file
-    f.close()
+    ofile.close()
 
     # Reopen file and replace placeholder with list of diffs
-    util.insert_text_into_file(
+    gcpy_util.insert_text_into_file(
         filename=outfilename,
         search_text=placeholder,
-        replace_text=diff_list_to_text(
+        replace_text=bmk_util.diff_list_to_text(
             refstr,
             devstr,
             diff_list),
@@ -376,7 +390,7 @@ def create_global_mass_table(
         trop_only=False,
         outfilename="GlobalMass_TropStrat.txt",
         verbose=False,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates a table of global masses for a list of species in contained in
@@ -432,12 +446,13 @@ def create_global_mass_table(
     # ==================================================================
     # Initialization
     # ==================================================================
-
-    # Make sure refdata and devdata are xarray Dataset objects
-    if not isinstance(refdata, xr.Dataset):
-        raise TypeError("The refdata argument must be an xarray Dataset!")
-    if not isinstance(devdata, xr.Dataset):
-        raise TypeError("The devdata argument must be an xarray Dataset!")
+    gcpy_util.verify_variable_type(refdata, xr.Dataset)
+    gcpy_util.verify_variable_type(refstr, str)
+    gcpy_util.verify_variable_type(devdata, xr.Dataset)
+    gcpy_util.verify_variable_type(devstr, str)
+    gcpy_util.verify_variable_type(varlist, list)
+    gcpy_util.verify_variable_type(met_and_masks, dict)
+    gcpy_util.verify_variable_type(label, str)
 
     # Make sure required arguments are passed
     if varlist is None:
@@ -448,7 +463,7 @@ def create_global_mass_table(
     # Load a YAML file containing species properties (such as
     # molecular weights), which we will need for unit conversions.
     # This is located in the "data" subfolder of this current directory.2
-    properties = util.read_config_file(
+    properties = gcpy_util.read_config_file(
         os.path.join(
             spcdb_dir,
             "species_database.yml"
@@ -462,9 +477,9 @@ def create_global_mass_table(
 
     # Create file
     try:
-        f = open(outfilename, "w")
-    except (IOError, OSError, FileNotFoundError) as e:
-        raise e(f"Could not open {outfilename} for writing!") from e
+        ofile = open(outfilename, "w", encoding="UTF-8")
+    except (IOError, OSError, FileNotFoundError) as exc:
+        raise exc(f"Could not open {outfilename} for writing!") from exc
 
     # Define a list for differences
     diff_list = []
@@ -481,17 +496,17 @@ def create_global_mass_table(
     placeholder = "@%% insert diff status here %%@"
 
     # Print header to file
-    print("#" * 89, file=f)
-    print(f"{title1 : <86}{'###'}", file=f)
-    print(f"{'###'  : <86}{'###'}", file=f)
-    print(f"{title2 : <86}{'###'}", file=f)
-    print(f"{title3 : <86}{'###'}", file=f)
-    print(f"{'###'  : <86}{'###'}", file=f)
-    print(f"{placeholder}", file=f)
-    print("#" * 89, file=f)
+    print("#" * 89, file=ofile)
+    print(f"{title1 : <86}{'###'}", file=ofile)
+    print(f"{'###'  : <86}{'###'}", file=ofile)
+    print(f"{title2 : <86}{'###'}", file=ofile)
+    print(f"{title3 : <86}{'###'}", file=ofile)
+    print(f"{'###'  : <86}{'###'}", file=ofile)
+    print(f"{placeholder}", file=ofile)
+    print("#" * 89, file=ofile)
 
     # Column headers
-    print(f"{'' : <19}{'Ref' : >20}{'Dev' : >20}{'Dev - Ref' : >14}{'% diff' : >10} {'diffs'}", file=f)
+    print(f"{'' : <19}{'Ref' : >20}{'Dev' : >20}{'Dev - Ref' : >14}{'% diff' : >10} {'diffs'}", file=ofile)
 
     # ==================================================================
     # Print global masses for all species
@@ -499,10 +514,10 @@ def create_global_mass_table(
     # NOTE: By this point, all secies will be in both Ref and Dev'
     # because we have added them in the calling routine
     # ==================================================================
-    for v in varlist:
+    for var in varlist:
 
         # Get the species name
-        spc_name = v.split("_")[1]
+        spc_name = var.split("_")[1]
 
         # Get a list of properties for the given species
         species_properties = properties.get(spc_name)
@@ -528,8 +543,8 @@ def create_global_mass_table(
         # Convert units of Ref and save to a DataArray
         # (or skip if Ref contains NaNs everywhere)
         # ==============================================================
-        refarray = refdata[v]
-        if not np.isnan(refdata[v].values).all():
+        refarray = refdata[var]
+        if not np.isnan(refdata[var].values).all():
             refarray = convert_units(
                 refarray,
                 spc_name,
@@ -544,8 +559,8 @@ def create_global_mass_table(
         # Convert units of Dev and save to a DataArray
         # (or skip if Dev contains NaNs everywhere)
         # ==============================================================
-        devarray = devdata[v]
-        if not np.isnan(devdata[v].values).all():
+        devarray = devdata[var]
+        if not np.isnan(devdata[var].values).all():
             devarray = convert_units(
                 devarray,
                 spc_name,
@@ -561,18 +576,18 @@ def create_global_mass_table(
         # (we will mask out tropospheric boxes in util.print_totals)
         # ==============================================================
         if trop_only:
-            util.print_totals(
+            bmk_util.print_totals(
                 refarray,
                 devarray,
-                f,
+                ofile,
                 diff_list,
                 masks=met_and_masks
             )
         else:
-            util.print_totals(
+            bmk_util.print_totals(
                 refarray,
                 devarray,
-                f,
+                ofile,
                 diff_list
             )
 
@@ -581,13 +596,13 @@ def create_global_mass_table(
     # ==================================================================
 
     # Close file
-    f.close()
+    ofile.close()
 
     # Reopen file and replace placeholder text by diff_text
-    util.insert_text_into_file(
+    gcpy_util.insert_text_into_file(
         filename=outfilename,
         search_text=placeholder,
-        replace_text=diff_list_to_text(
+        replace_text=bmk_util.diff_list_to_text(
             refstr,
             devstr,
             diff_list,
@@ -612,7 +627,7 @@ def create_mass_accumulation_table(
         trop_only=False,
         outfilename="GlobalMassAccum_TropStrat.txt",
         verbose=False,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates a table of global mass accumulation for a list of species in
@@ -676,16 +691,17 @@ def create_mass_accumulation_table(
     # ==================================================================
     # Initialization
     # ==================================================================
-
-    # Make sure refdata and devdata are xarray Dataset objects
-    if not isinstance(refdatastart, xr.Dataset):
-        raise TypeError("The refdatastart argument must be an xarray Dataset!")
-    if not isinstance(refdataend, xr.Dataset):
-        raise TypeError("The refdataend argument must be an xarray Dataset!")
-    if not isinstance(devdatastart, xr.Dataset):
-        raise TypeError("The devdatastart argument must be an xarray Dataset!")
-    if not isinstance(devdataend, xr.Dataset):
-        raise TypeError("The devdataend argument must be an xarray Dataset!")
+    gcpy_util.verify_variable_type(refdatastart, xr.Dataset)
+    gcpy_util.verify_variable_type(refdataend, xr.Dataset)
+    gcpy_util.verify_variable_type(refstr, str)
+    gcpy_util.verify_variable_type(refperiodstr, str)
+    gcpy_util.verify_variable_type(devdatastart, xr.Dataset)
+    gcpy_util.verify_variable_type(devdataend, xr.Dataset)
+    gcpy_util.verify_variable_type(devstr, str)
+    gcpy_util.verify_variable_type(devperiodstr, str)
+    gcpy_util.verify_variable_type(varlist, list)
+    gcpy_util.verify_variable_type(met_and_masks, dict)
+    gcpy_util.verify_variable_type(label, str)
 
     # Make sure required arguments are passed
     if varlist is None:
@@ -696,7 +712,7 @@ def create_mass_accumulation_table(
     # Load a YAML file containing species properties (such as
     # molecular weights), which we will need for unit conversions.
     # This is located in the "data" subfolder of this current directory.2
-    properties = util.read_config_file(
+    properties = gcpy_util.read_config_file(
         os.path.join(
             spcdb_dir,
             "species_database.yml"
@@ -710,9 +726,9 @@ def create_mass_accumulation_table(
 
     # Create file
     try:
-        f = open(outfilename, "w")
-    except (IOError, OSError, FileNotFoundError) as e:
-        raise e(f"Could not open {outfilename} for writing!") from e
+        ofile = open(outfilename, "w", encoding="UTF-8")
+    except (IOError, OSError, FileNotFoundError) as exc:
+        raise exc(f"Could not open {outfilename} for writing!") from exc
 
     # Define a list for differences
     diff_list = []
@@ -721,7 +737,7 @@ def create_mass_accumulation_table(
     title1 = f"### Global mass accumulation (Gg) {label} (Trop + Strat)"
     if trop_only:
         title1 = f"### Global mass accumulation (Gg) {label} (Trop only)"
-    title2 = f"### Computed as change in instantaneous mass across period"
+    title2 = "### Computed as change in instantaneous mass across period"
     title3 = f"### Ref = {refstr}"
     title4 = f"### Dev = {devstr}"
     title5 = f"### Ref period: {refperiodstr}"
@@ -732,22 +748,22 @@ def create_mass_accumulation_table(
     placeholder = "@%% insert diff status here %%@"
 
     # Print header to file
-    print("#" * 89, file=f)
-    print(f"{title1 : <86}{'###'}", file=f)
-    print(f"{'###'  : <86}{'###'}", file=f)
-    print(f"{title2 : <86}{'###'}", file=f)
-    print(f"{'###'  : <86}{'###'}", file=f)
-    print(f"{title3 : <86}{'###'}", file=f)
-    print(f"{title4 : <86}{'###'}", file=f)
-    print(f"{'###'  : <86}{'###'}", file=f)
-    print(f"{title5 : <86}{'###'}", file=f)
-    print(f"{title6 : <86}{'###'}", file=f)
-    print(f"{'###'  : <86}{'###'}", file=f)
-    print(f"{placeholder}", file=f)
-    print("#" * 89, file=f)
+    print("#" * 89, file=ofile)
+    print(f"{title1 : <86}{'###'}", file=ofile)
+    print(f"{'###'  : <86}{'###'}", file=ofile)
+    print(f"{title2 : <86}{'###'}", file=ofile)
+    print(f"{'###'  : <86}{'###'}", file=ofile)
+    print(f"{title3 : <86}{'###'}", file=ofile)
+    print(f"{title4 : <86}{'###'}", file=ofile)
+    print(f"{'###'  : <86}{'###'}", file=ofile)
+    print(f"{title5 : <86}{'###'}", file=ofile)
+    print(f"{title6 : <86}{'###'}", file=ofile)
+    print(f"{'###'  : <86}{'###'}", file=ofile)
+    print(f"{placeholder}", file=ofile)
+    print("#" * 89, file=ofile)
 
     # Column headers
-    print(f"{'' : <19}{'Ref' : >20}{'Dev' : >20}{'Dev - Ref' : >14}{'% diff' : >10} {'diffs'}", file=f)
+    print(f"{'' : <19}{'Ref' : >20}{'Dev' : >20}{'Dev - Ref' : >14}{'% diff' : >10} {'diffs'}", file=ofile)
 
     # ==================================================================
     # Print global masses for all species
@@ -755,10 +771,10 @@ def create_mass_accumulation_table(
     # NOTE: By this point, all secies will be in both Ref and Dev'
     # because we have added them in the calling routine
     # ==================================================================
-    for v in varlist:
+    for var in varlist:
 
         # Get the species name
-        spc_name = v.split("_")[1]
+        spc_name = var.split("_")[1]
 
         # Get a list of properties for the given species
         species_properties = properties.get(spc_name)
@@ -784,8 +800,8 @@ def create_mass_accumulation_table(
         # Convert units of Ref and save to a DataArray
         # (or skip if Ref contains NaNs everywhere)
         # ==============================================================
-        refarrays = refdatastart[v]
-        if not np.isnan(refdatastart[v].values).all():
+        refarrays = refdatastart[var]
+        if not np.isnan(refdatastart[var].values).all():
             refarrays = convert_units(
                 refarrays,
                 spc_name,
@@ -796,8 +812,8 @@ def create_mass_accumulation_table(
                 box_height=met_and_masks["Refs_BxHeight"],
             )
 
-        refarraye = refdataend[v]
-        if not np.isnan(refdataend[v].values).all():
+        refarraye = refdataend[var]
+        if not np.isnan(refdataend[var].values).all():
             refarraye = convert_units(
                 refarraye,
                 spc_name,
@@ -815,8 +831,8 @@ def create_mass_accumulation_table(
         # Convert units of Dev and save to a DataArray
         # (or skip if Dev contains NaNs everywhere)
         # ==============================================================
-        devarrays = devdatastart[v]
-        if not np.isnan(devdatastart[v].values).all():
+        devarrays = devdatastart[var]
+        if not np.isnan(devdatastart[var].values).all():
             devarrays = convert_units(
                 devarrays,
                 spc_name,
@@ -828,8 +844,8 @@ def create_mass_accumulation_table(
             )
         #print('devarrays: {}'.format(devarrays.values))
 
-        devarraye = devdataend[v]
-        if not np.isnan(devdataend[v].values).all():
+        devarraye = devdataend[var]
+        if not np.isnan(devdataend[var].values).all():
             devarraye = convert_units(
                 devarraye,
                 spc_name,
@@ -849,18 +865,18 @@ def create_mass_accumulation_table(
         # ==============================================================
         # ewl: for now trop_only is always false for accumulation table
         if trop_only:
-            util.print_totals(
+            bmk_util.print_totals(
                 refarray,
                 devarray,
-                f,
+                ofile,
                 diff_list,
                 masks=met_and_masks
             )
         else:
-            util.print_totals(
+            bmk_util.print_totals(
                 refarray,
                 devarray,
-                f,
+                ofile,
                 diff_list
             )
 
@@ -869,13 +885,13 @@ def create_mass_accumulation_table(
     # ==================================================================
 
     # Close file
-    f.close()
+    ofile.close()
 
     # Reopen file and replace placeholder text by diff_text
-    util.insert_text_into_file(
+    gcpy_util.insert_text_into_file(
         filename=outfilename,
         search_text=placeholder,
-        replace_text=diff_list_to_text(
+        replace_text=bmk_util.diff_list_to_text(
             refstr,
             devstr,
             diff_list,
@@ -898,13 +914,13 @@ def make_benchmark_conc_plots(
         benchmark_type="FullChemBenchmark",
         cmpres=None,
         plot_by_spc_cat=True,
-        restrict_cats=[],
-        plots=["sfc", "500hpa", "zonalmean"],
+        restrict_cats=None,
+        plots=None,
         use_cmap_RdBu=False,
         log_color_scale=False,
         sigdiff_files=None,
         normalize_by_area=False,
-        cats_in_ugm3=["Aerosols", "Secondary_Organic_Aerosols"],
+        cats_in_ugm3=None,
         areas=None,
         refmet=None,
         devmet=None,
@@ -913,7 +929,7 @@ def make_benchmark_conc_plots(
         second_ref=None,
         second_dev=None,
         time_mean=False,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates PDF files containing plots of species concentration
@@ -1031,7 +1047,7 @@ def make_benchmark_conc_plots(
     # ==================================================================
 
     # Create the destination folder
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # Define extra title text (usually a date string)
     # for the top-title of the plot
@@ -1040,8 +1056,14 @@ def make_benchmark_conc_plots(
     else:
         extra_title_txt = None
 
+    # Set defaults for other keyword arguments
+    if cats_in_ugm3 is None:
+        cats_in_ugm3 = ["Aerosols", "Secondary_Organic_Aerosols"]
+    if plots is None:
+        plots=["sfc", "500hpa", "zonalmean"]
+
     # Pick the proper function to read the data
-    reader = util.dataset_reader(time_mean, verbose=verbose)
+    reader = gcpy_util.dataset_reader(time_mean, verbose=verbose)
 
     # Open datasets
     refds = reader(ref, drop_variables=skip_these_vars).load()
@@ -1049,14 +1071,14 @@ def make_benchmark_conc_plots(
 
     # Rename SpeciesConc_ to SpeciesConcVV_ for consistency with new
     # naming introduced in GEOS-Chem 14.1.0
-    for v in refds.data_vars.keys():
-        if v.startswith('SpeciesConc_'):
-            spc = v.replace('SpeciesConc_', '')
-            refds = refds.rename({v: 'SpeciesConcVV_' + spc})
-    for v in devds.data_vars.keys():
-        if v.startswith('SpeciesConc_'):
-            spc = v.replace('SpeciesConc_', '')
-            devds = devds.rename({v: 'SpeciesConcVV_' + spc})
+    for var in refds.data_vars.keys():
+        if var.startswith('SpeciesConc_'):
+            spc = var.replace('SpeciesConc_', '')
+            refds = refds.rename({var: 'SpeciesConcVV_' + spc})
+    for var in devds.data_vars.keys():
+        if var.startswith('SpeciesConc_'):
+            spc = var.replace('SpeciesConc_', '')
+            devds = devds.rename({var: 'SpeciesConcVV_' + spc})
 
     # -----------------------------------------------------------------
     # Kludge, rename wrong variable name
@@ -1084,7 +1106,6 @@ def make_benchmark_conc_plots(
     diff_of_diffs = False
     if second_ref is not None and second_dev is not None:
         diff_of_diffs = True
-
 
     # Open second datasets if passed as arguments (used for diff of diffs)
     # Regrid to same horz grid resolution if two refs or two devs do not match.
@@ -1144,12 +1165,12 @@ def make_benchmark_conc_plots(
 
     # Compute the annual mean of datasets (if necessary)
     if time_mean:
-        refds = util.dataset_mean(refds)
-        devds = util.dataset_mean(devds)
-        refmetds = util.dataset_mean(refmetds)
-        devmetds = util.dataset_mean(devmetds)
-        second_ref = util.dataset_mean(second_refds)
-        second_dev = util.dataset_mean(second_devds)
+        refds = gcpy_util.dataset_mean(refds)
+        devds = gcpy_util.dataset_mean(devds)
+        refmetds = gcpy_util.dataset_mean(refmetds)
+        devmetds = gcpy_util.dataset_mean(devmetds)
+        second_ref = gcpy_util.dataset_mean(second_refds)
+        second_dev = gcpy_util.dataset_mean(second_devds)
 
     # Create regridding files if necessary while not in parallel loop
     [_ for _ in create_regridders(refds, devds, weightsdir=weightsdir)]
@@ -1179,9 +1200,9 @@ def make_benchmark_conc_plots(
     # Keep original units for plots.
     # ==================================================================
     if not plot_by_spc_cat:
-        [refds, devds] = util.add_missing_variables(refds, devds)
+        [refds, devds] = bmk_util.add_missing_variables(refds, devds)
         var_prefix = 'SpeciesConcVV_'
-        varlist = [k for k in refds.data_vars.keys() if var_prefix in k]
+        varlist = [var for var in refds.data_vars.keys() if var_prefix in var]
         varlist.sort()
 
         # Surface
@@ -1199,8 +1220,12 @@ def make_benchmark_conc_plots(
                              second_dev=second_devds,
                              spcdb_dir=spcdb_dir)
 
-        util.add_bookmarks_to_pdf(pdfname, varlist, remove_prefix=var_prefix,
-                                  verbose=verbose)
+        gcpy_util.add_bookmarks_to_pdf(
+            pdfname,
+            varlist,
+            remove_prefix=var_prefix,
+            verbose=verbose
+        )
         # 500 hPa
         pdfname = os.path.join(dst, 'SpeciesConc_500hPa.pdf')
         compare_single_level(refds, refstr, devds, devstr,
@@ -1217,8 +1242,12 @@ def make_benchmark_conc_plots(
                              second_dev=second_devds,
                              spcdb_dir=spcdb_dir)
 
-        util.add_bookmarks_to_pdf(pdfname, varlist, remove_prefix=var_prefix,
-                                  verbose=verbose)
+        gcpy_util.add_bookmarks_to_pdf(
+            pdfname,
+            varlist,
+            remove_prefix=var_prefix,
+            verbose=verbose
+        )
         # Zonal mean
         pdfname = os.path.join(dst, 'SpeciesConc_ZnlMn.pdf')
         compare_zonal_mean(refds, refstr, devds, devstr,
@@ -1233,8 +1262,12 @@ def make_benchmark_conc_plots(
                            second_dev=second_devds,
                            spcdb_dir=spcdb_dir)
 
-        util.add_bookmarks_to_pdf(pdfname, varlist, remove_prefix=var_prefix,
-                                  verbose=verbose)
+        gcpy_util.add_bookmarks_to_pdf(
+            pdfname,
+            varlist,
+            remove_prefix=var_prefix,
+            verbose=verbose
+        )
         return
 
     # ==================================================================
@@ -1247,31 +1280,37 @@ def make_benchmark_conc_plots(
         print("\nComputing lumped species for full chemistry benchmark")
 
         print("-->Adding lumped species to ref dataset")
-        refds = util.add_lumped_species_to_dataset(refds)
+        refds = bmk_util.add_lumped_species_to_dataset(refds)
 
         print("-->Adding lumped species to dev dataset")
-        devds = util.add_lumped_species_to_dataset(devds)
+        devds = bmk_util.add_lumped_species_to_dataset(devds)
 
         if diff_of_diffs:
             print("-->Adding lumped species to dev datasets")
-            second_refds = util.add_lumped_species_to_dataset(second_refds)
-            second_devds = util.add_lumped_species_to_dataset(second_devds)
+            second_refds = bmk_util.add_lumped_species_to_dataset(second_refds)
+            second_devds = bmk_util.add_lumped_species_to_dataset(second_devds)
 
-        util.archive_lumped_species_definitions(dst)
+        bmk_util.archive_config_file(bcf.LUMPED_SPC_YAML, dst)
         print("Lumped species computation complete.\n")
 
     # Get the list of species categories
-    catdict = util.get_species_categories(benchmark_type)
-    util.archive_species_categories(dst)
+    catdict = bmk_util.get_species_categories(benchmark_type)
+    bmk_util.archive_config_file(bcf.BENCHMARK_CAT_YAML, dst)
 
     # Make sure that Ref and Dev datasets have the same variables.
     # Variables that are in Ref but not in Dev will be added to Dev
     # with all missing values (NaNs). And vice-versa.
-    [refds, devds] = util.add_missing_variables(refds, devds)
+    [refds, devds] = bmk_util.add_missing_variables(refds, devds)
 
     if diff_of_diffs:
-        [refds, second_refds] = util.add_missing_variables(refds, second_refds)
-        [devds, second_devds] = util.add_missing_variables(devds, second_devds)
+        [refds, second_refds] = bmk_util.add_missing_variables(
+            refds,
+            second_refds
+        )
+        [devds, second_devds] = bmk_util.add_missing_variables(
+            devds,
+            second_devds
+        )
 
     # Collection prefix
     if "SpeciesConc" in collection:
@@ -1371,9 +1410,9 @@ def make_benchmark_conc_plots(
                 n_job=n_job,
                 spcdb_dir=spcdb_dir
             )
-            diff_sfc[:] = [v.replace(coll_prefix, "") for v in diff_sfc]
+            diff_sfc[:] = [var.replace(coll_prefix, "") for var in diff_sfc]
             cat_diff_dict['sfc'] = diff_sfc
-            util.add_nested_bookmarks_to_pdf(
+            gcpy_util.add_nested_bookmarks_to_pdf(
                 pdfname, filecat, catdict,
                 warninglist, remove_prefix=coll_prefix
             )
@@ -1417,10 +1456,10 @@ def make_benchmark_conc_plots(
                 n_job=n_job,
                 spcdb_dir=spcdb_dir
             )
-            diff_500[:] = [v.replace(coll_prefix, "") for v in diff_500]
+            diff_500[:] = [var.replace(coll_prefix, "") for var in diff_500]
             #dict_500[filecat] = diff_500
             cat_diff_dict['500'] = diff_500
-            util.add_nested_bookmarks_to_pdf(
+            gcpy_util.add_nested_bookmarks_to_pdf(
                 pdfname, filecat, catdict,
                 warninglist, remove_prefix=coll_prefix
             )
@@ -1463,10 +1502,10 @@ def make_benchmark_conc_plots(
                 n_job=n_job,
                 spcdb_dir=spcdb_dir
             )
-            diff_zm[:] = [v.replace(coll_prefix, "") for v in diff_zm]
+            diff_zm[:] = [var.replace(coll_prefix, "") for var in diff_zm]
             #dict_zm = diff_zm
             cat_diff_dict['zm'] = diff_zm
-            util.add_nested_bookmarks_to_pdf(
+            gcpy_util.add_nested_bookmarks_to_pdf(
                 pdfname, filecat, catdict,
                 warninglist, remove_prefix=coll_prefix
             )
@@ -1506,7 +1545,7 @@ def make_benchmark_conc_plots(
                 n_job=n_job,
                 spcdb_dir=spcdb_dir
             )
-            util.add_nested_bookmarks_to_pdf(
+            gcpy_util.add_nested_bookmarks_to_pdf(
                 pdfname, filecat, catdict,
                 warninglist, remove_prefix=coll_prefix
             )
@@ -1535,33 +1574,33 @@ def make_benchmark_conc_plots(
         for filename in sigdiff_files:
             if "sfc" in plots:
                 if "sfc" in filename:
-                    with open(filename, "a+") as f:
-                        for c, diff_list in dict_sfc.items():
-                            print(f"* {c}: ", file=f, end="")
-                            for v in diff_list:
-                                print(f"{v} ", file=f, end="")
-                            print(file=f)
-                        f.close()
+                    with open(filename, "a+", encoding="UTF-8") as ofile:
+                        for cat, diff_list in dict_sfc.items():
+                            print(f"* {cat}: ", file=ofile, end="")
+                            for var in diff_list:
+                                print(f"{var} ", file=ofile, end="")
+                            print(file=ofile)
+                        ofile.close()
 
             if "500hpa" in plots:
                 if "500hpa" in filename:
-                    with open(filename, "a+") as f:
-                        for c, diff_list in dict_500.items():
-                            print(f"* {c}: ", file=f, end="")
-                            for v in diff_list:
-                                print(f"{v} ", file=f, end="")
-                            print(file=f)
-                        f.close()
+                    with open(filename, "a+", encoding="UTF-8") as ofile:
+                        for cat, diff_list in dict_500.items():
+                            print(f"* {cat}: ", file=ofile, end="")
+                            for var in diff_list:
+                                print(f"{var} ", file=ofile, end="")
+                            print(file=ofile)
+                        ofile.close()
 
             if "zonalmean" in plots or "zm" in plots:
                 if "zonalmean" in filename or "zm" in filename:
-                    with open(filename, "a+") as f:
-                        for c, diff_list in dict_zm.items():
-                            print(f"* {c}: ", file=f, end="")
-                            for v in diff_list:
-                                print(f"{v} ", file=f, end="")
-                            print(file=f)
-                        f.close()
+                    with open(filename, "a+", encoding="UTF-8") as ofile:
+                        for cat, diff_list in dict_zm.items():
+                            print(f"* {cat}: ", file=ofile, end="")
+                            for var in diff_list:
+                                print(f"{var} ", file=ofile, end="")
+                            print(file=ofile)
+                        ofile.close()
 
     # -------------------------------------------
     # Clean up
@@ -1595,7 +1634,7 @@ def make_benchmark_emis_plots(
         weightsdir='.',
         n_job=-1,
         time_mean=False,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates PDF files containing plots of emissions for model
@@ -1699,7 +1738,7 @@ def make_benchmark_emis_plots(
     # =================================================================
 
     # Create the destination folder
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # Create the "Emissions" category folder.  If subdst is passed,
     # then create a sub-folder (needed for the 1-year benchmarks).
@@ -1715,49 +1754,49 @@ def make_benchmark_emis_plots(
         extra_title_txt = None
 
     # Get the function that will read the dataset
-    reader = util.dataset_reader(time_mean, verbose=verbose)
+    reader = gcpy_util.dataset_reader(time_mean, verbose=verbose)
 
     # Ref dataset
     try:
         refds = reader(ref, drop_variables=skip_these_vars)
-    except (OSError, IOError, FileNotFoundError) as e:
-        raise e(f"Could not find Ref file: {ref}") from e
+    except (OSError, IOError, FileNotFoundError) as exc:
+        raise exc(f"Could not find Ref file: {ref}") from exc
 
     # Dev dataset
     try:
         devds = reader(dev, drop_variables=skip_these_vars)
-    except (OSError, IOError, FileNotFoundError) as e:
-        raise e(f"Could not find Ref file: {dev}") from e
+    except (OSError, IOError, FileNotFoundError) as exc:
+        raise exc(f"Could not find Ref file: {dev}") from exc
 
     # Compute mean of data over the time dimension (if time_mean=True)
     if time_mean:
-        refds = util.dataset_mean(refds)
-        devds = util.dataset_mean(devds)
+        refds = gcpy_util.dataset_mean(refds)
+        devds = gcpy_util.dataset_mean(devds)
 
     # Make sure that Ref and Dev datasets have the same variables.
     # Variables that are in Ref but not in Dev will be added to Dev
     # with all missing values (NaNs). And vice-versa.
-    [refds, devds] = util.add_missing_variables(refds, devds)
+    [refds, devds] = bmk_util.add_missing_variables(refds, devds)
 
     # Create regridding files if necessary while not in parallel loop
     [_ for _ in create_regridders(refds, devds, weightsdir=weightsdir)]
 
     # Combine 2D and 3D variables into an overall list
-    vardict = util.compare_varnames(refds, devds, quiet=(not verbose))
-    vars2D = vardict["commonvars2D"]
-    vars3D = vardict["commonvars3D"]
-    varlist = vars2D + vars3D
+    vardict = bmk_util.compare_varnames(refds, devds, quiet=(not verbose))
+    vars_2d = vardict["commonvars2D"]
+    vars_3d = vardict["commonvars3D"]
+    varlist = vars_2d + vars_3d
 
     # ==================================================================
     # Compute column sums for 3D emissions
     # Make sure not to clobber the DataArray attributes
     # ==================================================================
     with xr.set_options(keep_attrs=True):
-        for v in vars3D:
-            if "lev" in refds[v].dims:
-                refds[v] = refds[v].sum(dim="lev")
-            if "lev" in devds[v].dims:
-                devds[v] = devds[v].sum(dim="lev")
+        for var in vars_3d:
+            if "lev" in refds[var].dims:
+                refds[var] = refds[var].sum(dim="lev")
+            if "lev" in devds[var].dims:
+                devds[var] = devds[var].sum(dim="lev")
 
     # ==================================================================
     # If inputs plot_by* are both false, plot all emissions in same file
@@ -1788,14 +1827,18 @@ def make_benchmark_emis_plots(
             n_job=n_job,
             spcdb_dir=spcdb_dir
         )
-        util.add_bookmarks_to_pdf(pdfname, varlist,
-                                  remove_prefix="Emis", verbose=verbose)
+        gcpy_util.add_bookmarks_to_pdf(
+            pdfname,
+            varlist,
+            remove_prefix="Emis",
+            verbose=verbose
+        )
         return
 
     # Get emissions variables (non-inventory), categories, and species
-    emis_vars = [v for v in varlist if v[:4] == "Emis"]
-    emis_cats = sorted(set([v.split("_")[1] for v in emis_vars]))
-    emis_spc = sorted(set([v.split("_")[0][4:] for v in emis_vars]))
+    emis_vars = [var for var in varlist if var[:4] == "Emis"]
+    emis_cats = sorted(set([var.split("_")[1] for var in emis_vars]))
+    emis_spc = sorted(set([var.split("_")[0][4:] for var in emis_vars]))
 
     # This is fixed in 12.3.2, comment out for now (bmy, 5/1/19)
     #    # Handle Bioburn and BioBurn as same categories (temporary until 12.3.1)
@@ -1822,26 +1865,27 @@ def make_benchmark_emis_plots(
                 os.mkdir(emisspcdir)
 
         # for c in emis_cats:
-        def createfile_hco_cat(c):
+        def createfile_hco_cat(cat):
             # Handle cases of bioburn and bioBurn (temporary until 12.3.1)
-            if c == "Bioburn":
-                varnames = [k for k in emis_vars
-                            if any(b in k for b in ["Bioburn", "BioBurn"])
-                            ]
+            if cat == "Bioburn":
+                varnames = [
+                    var for var in emis_vars
+                    if any(bio in var for bio in ["Bioburn", "BioBurn"])
+                ]
             else:
-                varnames = [k for k in emis_vars if c in k]
+                varnames = [var for var in emis_vars if cat in var]
 
             # Create the PDF name.  If subdst is passed, then also add
             # subdst to the file name (e.g. as for 1-year benchmarks).
             if subdst is not None:
                 pdfname = os.path.join(
                     emisspcdir,
-                    f"{c}_Emissions_{subdst}.pdf"
+                    f"{cat}_Emissions_{subdst}.pdf"
                 )
             else:
                 pdfname = os.path.join(
                     emisspcdir,
-                    f"{c}_Emissions.pdf"
+                    f"{cat}_Emissions.pdf"
                 )
             diff_dict = {}
             diff_emis = []
@@ -1862,13 +1906,16 @@ def make_benchmark_emis_plots(
                 spcdb_dir=spcdb_dir
             )
 
-            util.add_bookmarks_to_pdf(
-                pdfname, varnames, remove_prefix="Emis", verbose=verbose
+            gcpy_util.add_bookmarks_to_pdf(
+                pdfname,
+                varnames,
+                remove_prefix="Emis",
+                verbose=verbose
             )
             # Save the list of quantities with significant differences for
             # this category into the diff_dict dictionary for use below
-            diff_emis[:] = [v.replace("Emis", "") for v in diff_emis]
-            diff_emis[:] = [v.replace("_" + c, "") for v in diff_emis]
+            diff_emis[:] = [var.replace("Emis", "") for var in diff_emis]
+            diff_emis[:] = [var.replace("_" + cat, "") for var in diff_emis]
             diff_dict[c] = diff_emis
             return diff_dict
 
@@ -1885,13 +1932,13 @@ def make_benchmark_emis_plots(
         if sigdiff_files is not None:
             for filename in sigdiff_files:
                 if "emis" in filename:
-                    with open(filename, "w+") as f:
-                        for c, diff_list in dict_emis.items():
-                            print(f"* {c}: ", file=f, end="")
-                            for v in diff_list:
-                                print(f"{v} ", file=f, end="")
-                            print(file=f)
-                        f.close()
+                    with open(filename, "w+", encoding="UTF-8") as ofile:
+                        for cat, diff_list in dict_emis.items():
+                            print(f"* {cat}: ", file=ofile, end="")
+                            for var in diff_list:
+                                print(f"{var} ", file=ofile, end="")
+                            print(file=ofile)
+                        ofile.close()
 
     # ==================================================================
     # if plot_by_spc_cat is true, make a file for each benchmark
@@ -1899,7 +1946,7 @@ def make_benchmark_emis_plots(
     # ==================================================================
     if plot_by_spc_cat:
 
-        catdict = util.get_species_categories(benchmark_type)
+        catdict = bmk_util.get_species_categories(benchmark_type)
         # in case any emissions are skipped (for use in nested pdf bookmarks)
         warninglist = ([])
         # for checking if emissions species not defined in benchmark category
@@ -1918,8 +1965,8 @@ def make_benchmark_emis_plots(
                     catspc.append(spc)
                     if spc in emis_spc:
                         emisdict[filecat][spc] = []
-                        emisvars = [v for v in emis_vars
-                                    if spc == v.split("_")[0][4:]]
+                        emisvars = [var for var in emis_vars
+                                    if spc == var.split("_")[0][4:]]
                         for var in emisvars:
                             emisdict[filecat][spc].append(
                                 var.replace("Emis", ""))
@@ -1971,8 +2018,12 @@ def make_benchmark_emis_plots(
                 n_job=n_job,
                 spcdb_dir=spcdb_dir
             )
-            util.add_nested_bookmarks_to_pdf(
-                pdfname, filecat, emisdict, warninglist)
+            gcpy_util.add_nested_bookmarks_to_pdf(
+                pdfname,
+                filecat,
+                emisdict,
+                warninglist
+            )
             return catspc
         results = Parallel(n_jobs=n_job)(
             delayed(createfile_bench_cat)(filecat)
@@ -1984,10 +2035,9 @@ def make_benchmark_emis_plots(
         # category
         for spc in emis_spc:
             if spc not in allcatspc:
-                print(\
-                    f"Warning: species {spc} has emissions diagnostics but is not"
-                      " in benchmark_categories.yml"
-                )
+                msg = f"Warning: species {spc} has emissions diagnostics "
+                msg += "but is not in benchmark_categories.yml"
+                print(msg)
 
     # -------------------------------------------
     # Clean up
@@ -2007,9 +2057,9 @@ def make_benchmark_emis_tables(
         refmet=None,
         devmet=None,
         overwrite=False,
-        ref_interval=[2678400.0],
-        dev_interval=[2678400.0],
-        spcdb_dir=config_dir
+        ref_interval=None,
+        dev_interval=None,
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates a text file containing emission totals by species and
@@ -2069,12 +2119,18 @@ def make_benchmark_emis_tables(
     # ==================================================================
 
     # Create the destination folder
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # Create the "Tables" category folder if it does not exist
     emisdir = os.path.join(dst, "Tables")
     if not os.path.isdir(emisdir):
         os.mkdir(emisdir)
+
+    # Set default intervals to 1-month (July) in seconds
+    if ref_interval is None:
+        ref_interval=[2678400.0]
+    if dev_interval is None:
+        dev_interval=[2678400.0]
 
     # ==================================================================
     # Read data from netCDF into Dataset objects
@@ -2119,22 +2175,16 @@ def make_benchmark_emis_tables(
     # ==================================================================
 
     # Emissions species dictionary
-    spc_dict = util.read_config_file(
-        os.path.join(
-            os.path.dirname(__file__),
-            emission_spc
-        ),
+    spc_dict = gcpy_util.read_config_file(
+        bcf.EMISSION_SPC_YAML,
         quiet=True
     )
-    species=spc_dict[benchmark_type]
-    inv_dict = util.read_config_file(
-        os.path.join(
-            os.path.dirname(__file__),
-            emission_inv
-        ),
+    species = spc_dict[benchmark_type]
+    inv_dict = gcpy_util.read_config_file(
+        bcf.EMISSION_INV_YAML,
         quiet=True
     )
-    inventories=inv_dict[benchmark_type]
+    inventories = inv_dict[benchmark_type]
 
     # Destination files
     file_emis_totals = os.path.join(emisdir, "Emission_totals.txt")
@@ -2192,7 +2242,7 @@ def make_benchmark_jvalue_plots(
         subdst=None,
         local_noon_jvalues=False,
         cmpres=None,
-        plots=["sfc", "500hpa", "zonalmean"],
+        plots=None,
         overwrite=False,
         verbose=False,
         flip_ref=False,
@@ -2202,7 +2252,7 @@ def make_benchmark_jvalue_plots(
         weightsdir='.',
         n_job=-1,
         time_mean=False,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates PDF files containing plots of J-values for model
@@ -2314,39 +2364,47 @@ def make_benchmark_jvalue_plots(
     # ==================================================================
 
     # Create the directory for output
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
+
+    # Set defaults
+    if plots is None:
+        plots=["sfc", "500hpa", "zonalmean"]
 
     # Get the function that will read file(s) into a Dataset
-    reader = util.dataset_reader(time_mean, verbose=verbose)
+    reader = gcpy_util.dataset_reader(time_mean, verbose=verbose)
 
     # Ref dataset
     try:
         refds = reader(ref, drop_variables=skip_these_vars)
-    except (OSError, IOError, FileNotFoundError) as e:
-        raise e(f"Could not find Ref file: {ref}") from e
+    except (OSError, IOError, FileNotFoundError) as exc:
+        raise exc(f"Could not find Ref file: {ref}") from exc
 
     # Dev dataset
     try:
         devds = reader(dev, drop_variables=skip_these_vars)
-    except (OSError, IOError, FileNotFoundError) as e:
-        raise e(f"Could not find Ref file: {dev}") from e
+    except (OSError, IOError, FileNotFoundError) as exc:
+        raise exc(f"Could not find Ref file: {dev}") from exc
 
     # Compute mean of data over the time dimension (if time_mean=True)
     if time_mean:
-        refds = util.dataset_mean(refds)
-        devds = util.dataset_mean(devds)
+        refds = gcpy_util.dataset_mean(refds)
+        devds = gcpy_util.dataset_mean(devds)
 
     # Make sure that Ref and Dev datasets have the same variables.
     # Variables that are in Ref but not in Dev will be added to Dev
     # with all missing values (NaNs). And vice-versa.
-    [refds, devds] = util.add_missing_variables(refds, devds)
+    [refds, devds] = bmk_util.add_missing_variables(refds, devds)
 
     # Create regridding files if necessary
     [_ for _ in create_regridders(refds, devds, weightsdir=weightsdir)]
 
     # Get a list of the 3D variables in both datasets
     if varlist is None:
-        vardict = util.compare_varnames(refds, devds, quiet=(not verbose))
+        vardict = bmk_util.compare_varnames(
+            refds,
+            devds,
+            quiet=(not verbose)
+        )
         cmn = vardict["commonvars3D"]
 
     # ==================================================================
@@ -2358,7 +2416,7 @@ def make_benchmark_jvalue_plots(
         # (or use the varlist passed via tha argument list)
         prefix = "JNoon_"
         if varlist is None:
-            varlist = [v for v in cmn if prefix in v]
+            varlist = [var for var in cmn if prefix in var]
 
         # Make sure JNoonFrac (fraction of times it was local noon
         # in each column) is present in both Ref and Dev datasets
@@ -2368,10 +2426,16 @@ def make_benchmark_jvalue_plots(
 
         # JNoon_* are cumulative sums of local noon J-values; we need
         # to divide these by JNoonFrac to get the average value
-        refds = util.divide_dataset_by_dataarray(refds,
-                                                 refds["JNoonFrac"], varlist)
-        devds = util.divide_dataset_by_dataarray(devds,
-                                                 devds["JNoonFrac"], varlist)
+        refds = gcpy_util.divide_dataset_by_dataarray(
+            refds,
+            refds["JNoonFrac"],
+            varlist
+        )
+        devds = gcpy_util.divide_dataset_by_dataarray(
+            devds,
+            devds["JNoonFrac"],
+            varlist
+        )
 
         # Subfolder of dst where PDF files will be printed
         catdir = "JValuesLocalNoon"
@@ -2382,7 +2446,7 @@ def make_benchmark_jvalue_plots(
         # (or use the varlist passed via tha argument list)
         prefix = "Jval"
         if varlist is None:
-            varlist = [v for v in cmn if prefix in v]
+            varlist = [var for var in cmn if prefix in var]
 
         # Subfolder of dst where PDF files will be printed
         catdir = "JValues"
@@ -2436,8 +2500,8 @@ def make_benchmark_jvalue_plots(
             n_job=n_job,
             spcdb_dir=spcdb_dir
         )
-        diff_sfc[:] = [v.replace(prefix, "") for v in diff_sfc]
-        util.add_bookmarks_to_pdf(
+        diff_sfc[:] = [var.replace(prefix, "") for var in diff_sfc]
+        gcpy_util.add_bookmarks_to_pdf(
             pdfname,
             varlist,
             remove_prefix=prefix,
@@ -2474,9 +2538,13 @@ def make_benchmark_jvalue_plots(
             n_job=n_job,
             spcdb_dir=spcdb_dir
         )
-        diff_500[:] = [v.replace(prefix, "") for v in diff_500]
-        util.add_bookmarks_to_pdf(pdfname, varlist,
-                                  remove_prefix=prefix, verbose=verbose)
+        diff_500[:] = [var.replace(prefix, "") for var in diff_500]
+        gcpy_util.add_bookmarks_to_pdf(
+            pdfname,
+            varlist,
+            remove_prefix=prefix,
+            verbose=verbose
+        )
     # Full-column zonal mean plots
     if "zonalmean" in plots:
         if subdst is not None:
@@ -2506,13 +2574,13 @@ def make_benchmark_jvalue_plots(
             n_job=n_job,
             spcdb_dir=spcdb_dir
         )
-        diff_zm[:] = [v.replace(prefix, "") for v in diff_zm]
-        util.add_bookmarks_to_pdf(
+        diff_zm[:] = [var.replace(prefix, "") for var in diff_zm]
+        gcpy_util.add_bookmarks_to_pdf(
             pdfname,
             varlist,
             remove_prefix=prefix,
-            verbose=verbose)
-
+            verbose=verbose
+        )
         # Strat_ZonalMean plots will use a log-pressure Y-axis, with
         # a range of 1..100 hPa, as per GCSC request. (bmy, 8/13/19)
         if subdst is not None:
@@ -2543,8 +2611,12 @@ def make_benchmark_jvalue_plots(
             n_job=n_job,
             spcdb_dir=spcdb_dir
         )
-        util.add_bookmarks_to_pdf(pdfname, varlist,
-                                  remove_prefix=prefix, verbose=verbose)
+        gcpy_util.add_bookmarks_to_pdf(
+            pdfname,
+            varlist,
+            remove_prefix=prefix,
+            verbose=verbose
+        )
 
         # ==============================================================
         # Write the lists of J-values that have significant differences,
@@ -2554,30 +2626,30 @@ def make_benchmark_jvalue_plots(
             for filename in sigdiff_files:
                 if "sfc" in plots:
                     if "sfc" in filename:
-                        with open(filename, "a+") as f:
-                            print("* J-Values: ", file=f, end="")
-                            for v in diff_sfc:
-                                print(f"{v} ", file=f, end="")
-                            print(file=f)
-                            f.close()
+                        with open(filename, "a+", encoding="UTF-8") as ofile:
+                            print("* J-Values: ", file=ofile, end="")
+                            for var in diff_sfc:
+                                print(f"{var} ", file=ofile, end="")
+                            print(file=ofile)
+                            ofile.close()
 
                 if "500" in plots:
                     if "500" in filename:
-                        with open(filename, "a+") as f:
-                            print("* J-Values: ", file=f, end="")
-                            for v in diff_500:
-                                print(f"{v} ", file=f, end="")
-                            print(file=f)
-                            f.close()
+                        with open(filename, "a+", encoding="UTF-8") as ofile:
+                            print("* J-Values: ", file=ofile, end="")
+                            for var in diff_500:
+                                print(f"{var} ", file=ofile, end="")
+                            print(file=ofile)
+                            ofile.close()
 
                 if "zonalmean" in plots or "zm" in plots:
                     if "zonalmean" in filename or "zm" in filename:
-                        with open(filename, "a+") as f:
-                            print("* J-Values: ", file=f, end="")
-                            for v in diff_zm:
-                                print(f"{v} ", file=f, end="")
-                            print(file=f)
-                            f.close()
+                        with open(filename, "a+", encoding="UTF-8") as ofile:
+                            print("* J-Values: ", file=ofile, end="")
+                            for var in diff_zm:
+                                print(f"{var} ", file=ofile, end="")
+                            print(file=ofile)
+                            ofile.close()
 
     # -------------------------------------------
     # Clean up
@@ -2603,7 +2675,7 @@ def make_benchmark_aod_plots(
         weightsdir='.',
         n_job=-1,
         time_mean=False,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates PDF files containing plots of column aerosol optical
@@ -2679,7 +2751,7 @@ def make_benchmark_aod_plots(
     # ==================================================================
 
     # Create destination plots directory
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # Create the "Aerosols" directory as a subfolder of dst.
     # If subdst is passed, then create a subdirectory of the "Aerosols"
@@ -2696,24 +2768,24 @@ def make_benchmark_aod_plots(
         extra_title_txt = None
 
     # Get the function that will read file(s) into a dataset
-    reader = util.dataset_reader(time_mean, verbose=verbose)
+    reader = gcpy_util.dataset_reader(time_mean, verbose=verbose)
 
     # Read the Ref dataset
     try:
         refds = reader(ref, drop_variables=skip_these_vars)
-    except (OSError, IOError, FileNotFoundError) as e:
-        raise e(f"Could not find Ref file: {ref}") from e
+    except (OSError, IOError, FileNotFoundError) as exc:
+        raise exc(f"Could not find Ref file: {ref}") from exc
 
     # Read the Dev dataset
     try:
         devds = reader(dev, drop_variables=skip_these_vars)
-    except (OSError, IOError, FileNotFoundError) as e:
-        raise e(f"Could not find Ref file: {dev}") from e
+    except (OSError, IOError, FileNotFoundError) as exc:
+        raise exc(f"Could not find Ref file: {dev}") from exc
 
     # Compute mean of data over the time dimension (if time_mean=True)
     if time_mean:
-        refds = util.dataset_mean(refds)
-        devds = util.dataset_mean(devds)
+        refds = gcpy_util.dataset_mean(refds)
+        devds = gcpy_util.dataset_mean(devds)
 
     # Create regridding files if necessary
     [_ for _ in create_regridders(refds, devds, weightsdir=weightsdir)]
@@ -2727,38 +2799,35 @@ def make_benchmark_aod_plots(
 
         # Rename variables in the Ref dataset
         old2new = {}
-        for v in refds.data_vars.keys():
-            if "WL1" in v:
-                newname = v.replace("WL1", "550nm")
-                old2new[v] = newname
+        for var in refds.data_vars.keys():
+            if "WL1" in var:
+                newname = var.replace("WL1", "550nm")
+                old2new[var] = newname
         refds = refds.rename(old2new)
 
         # Rename variables in the Dev dataset
         old2new = {}
-        for v in devds.data_vars.keys():
-            if "WL1" in v:
-                newname = v.replace("WL1", "550nm")
-                old2new[v] = newname
+        for var in devds.data_vars.keys():
+            if "WL1" in var:
+                newname = var.replace("WL1", "550nm")
+                old2new[var] = newname
         devds = devds.rename(old2new)
 
     # Make sure that Ref and Dev datasets have the same variables.
     # Variables that are in Ref but not in Dev will be added to Dev
     # with all missing values (NaNs). And vice-versa.
-    [refds, devds] = util.add_missing_variables(refds, devds)
+    [refds, devds] = bmk_util.add_missing_variables(refds, devds)
 
     # Find common AOD variables in both datasets
     # (or use the varlist passed via keyword argument)
     if varlist is None:
-        vardict = util.compare_varnames(refds, devds, quiet=(not verbose))
-        cmn3D = vardict["commonvars3D"]
-        varlist = [v for v in cmn3D if "AOD" in v and "_bin" not in v]
+        vardict = bmk_util.compare_varnames(refds, devds, quiet=(not verbose))
+        cmn_3d = vardict["commonvars3D"]
+        varlist = [var for var in cmn_3d if "AOD" in var and "_bin" not in var]
 
     # Dictionary and list for new display names
-    newvars = util.read_config_file(
-        os.path.join(
-            os.path.dirname(__file__),
-            aod_spc
-        ),
+    newvars = gcpy_util.read_config_file(
+        bcf.AOD_SPC_YAML,
         quiet=True
     )
     newvarlist = []
@@ -2769,26 +2838,26 @@ def make_benchmark_aod_plots(
 
     # Take one of the variables so we can use its dims, coords,
     # attrs to create the DataArray object for total AOD
-    v = varlist[0]
+    var = varlist[0]
 
     # Create a DataArray to hold total column AOD
     # This is the same shape as the DataArray objects in refds
     reftot = xr.DataArray(
-        np.zeros(refds[v].values.shape),
+        np.zeros(refds[var].values.shape),
         name="AODTotal",
-        dims=refds[v].dims,
-        coords=refds[v].coords,
-        attrs=refds[v].attrs,
+        dims=refds[var].dims,
+        coords=refds[var].coords,
+        attrs=refds[var].attrs,
     )
 
     # Create a DataArray to hold total column AOD
     # This is the same shape as the DataArray objects in devds
     devtot = xr.DataArray(
-        np.zeros(devds[v].values.shape),
+        np.zeros(devds[var].values.shape),
         name="AODTotal",
-        dims=devds[v].dims,
-        coords=devds[v].coords,
-        attrs=devds[v].attrs,
+        dims=devds[var].dims,
+        coords=devds[var].coords,
+        attrs=devds[var].attrs,
     )
 
     # Save the variable attributes so that we can reattach them
@@ -2799,10 +2868,10 @@ def make_benchmark_aod_plots(
     # Avoid double-counting SOA from aqueous isoprene, which is
     # already accounted for in AODHyg550nm_OCPI.  Also see
     # Github issue: https://github.com/geoschem/gcpy/issues/65
-    for v in varlist:
-        if "AODSOAfromAqIsoprene550nm" not in v:
-            reftot = reftot + refds[v]
-            devtot = devtot + devds[v]
+    for var in varlist:
+        if "AODSOAfromAqIsoprene550nm" not in var:
+            reftot = reftot + refds[var]
+            devtot = devtot + devds[var]
 
     # Reattach the variable attributes
     reftot.name = "AODTotal"
@@ -2825,26 +2894,26 @@ def make_benchmark_aod_plots(
     # using the new display name, and preserving attributes.
     # Merge the new DataArrays back into the DataSets.
     # ==================================================================
-    for v in varlist:
+    for var in varlist:
 
         # Get the new name for each AOD variable (it's easier to display)
-        if v in newvars:
-            newname = newvars[v]
+        if var in newvars:
+            newname = newvars[var]
             newvarlist.append(newname)
         else:
-            raise ValueError(f"Could not find a display name for {v}")
+            raise ValueError(f"Could not find a display name for {var}")
 
         # Don't clobber existing DataArray and Dataset attributes
         with xr.set_options(keep_attrs=True):
 
             # Add column AOD of newname to Ref
-            array = refds[v].sum(dim="lev")
+            array = refds[var].sum(dim="lev")
             array.name = newname
             array.attrs["units"] = "1"
             refds = xr.merge([refds, array])
 
             # Add column AOD of newname to Dev
-            array = devds[v].sum(dim="lev")
+            array = devds[var].sum(dim="lev")
             array.name = newname
             array.attrs["units"] = "1"
             devds = xr.merge([devds, array])
@@ -2880,9 +2949,12 @@ def make_benchmark_aod_plots(
         n_job=n_job,
         spcdb_dir=spcdb_dir
     )
-    diff_aod[:] = [v.replace("Column_AOD_", "") for v in diff_aod]
-    util.add_bookmarks_to_pdf(
-        pdfname, newvarlist, remove_prefix="Column_AOD_", verbose=verbose
+    diff_aod[:] = [var.replace("Column_AOD_", "") for var in diff_aod]
+    gcpy_util.add_bookmarks_to_pdf(
+        pdfname,
+        newvarlist,
+        remove_prefix="Column_AOD_",
+        verbose=verbose
     )
 
     # ==================================================================
@@ -2892,12 +2964,12 @@ def make_benchmark_aod_plots(
     if sigdiff_files is not None:
         for filename in sigdiff_files:
             if "sfc" in filename:
-                with open(filename, "a+") as f:
-                    print("* Column AOD: ", file=f, end="")
-                    for v in diff_aod:
-                        print(f"{v} ", file=f, end="")
-                    print(file=f)
-                    f.close()
+                with open(filename, "a+", encoding="UTF-8") as ofile:
+                    print("* Column AOD: ", file=ofile, end="")
+                    for var in diff_aod:
+                        print(f"{var} ", file=ofile, end="")
+                    print(file=ofile)
+                    ofile.close()
 
     # -------------------------------------------
     # Clean up
@@ -2918,7 +2990,7 @@ def make_benchmark_mass_tables(
         overwrite=False,
         verbose=False,
         label="at end of simulation",
-        spcdb_dir=config_dir,
+        spcdb_dir=bcf.CONFIG_DIR,
         ref_met_extra=None,
         dev_met_extra=None
 ):
@@ -3007,12 +3079,12 @@ def make_benchmark_mass_tables(
     # ==================================================================
 
     # Ref
-    if any(v.startswith("SPC_") for v in refds.data_vars.keys()):
-        refds = util.rename_and_flip_gchp_rst_vars(refds)
+    if any(var.startswith("SPC_") for var in refds.data_vars.keys()):
+        refds = gcpy_util.rename_and_flip_gchp_rst_vars(refds)
 
     # Dev
-    if any(v.startswith("SPC_") for v in devds.data_vars.keys()):
-        devds = util.rename_and_flip_gchp_rst_vars(devds)
+    if any(var.startswith("SPC_") for var in devds.data_vars.keys()):
+        devds = gcpy_util.rename_and_flip_gchp_rst_vars(devds)
 
     # ==================================================================
     # Make sure that all necessary meteorological variables are found
@@ -3022,9 +3094,9 @@ def make_benchmark_mass_tables(
 
         # Find the area variable in Ref
         if ref_met_extra is None:
-            ref_area = util.get_area_from_dataset(refds)
+            ref_area = gcpy_util.get_area_from_dataset(refds)
         else:
-            ref_area = util.get_area_from_dataset(
+            ref_area = gcpy_util.get_area_from_dataset(
                 xr.open_dataset(
                     ref_met_extra,
                     drop_variables=skip_these_vars
@@ -3033,9 +3105,9 @@ def make_benchmark_mass_tables(
 
         # Find the area variable in Dev
         if dev_met_extra is None:
-            dev_area = util.get_area_from_dataset(devds)
+            dev_area = gcpy_util.get_area_from_dataset(devds)
         else:
-            dev_area = util.get_area_from_dataset(
+            dev_area = gcpy_util.get_area_from_dataset(
                 xr.open_dataset(
                     dev_met_extra,
                     drop_variables=skip_these_vars
@@ -3045,49 +3117,50 @@ def make_benchmark_mass_tables(
     # Find required meteorological variables in Ref
     # (or exit with an error if we can't find them)
     metvar_list = ["Met_DELPDRY", "Met_BXHEIGHT", "Met_TropLev"]
-    refmet = util.get_variables_from_dataset(refds, metvar_list)
-    devmet = util.get_variables_from_dataset(devds, metvar_list)
+    refmet = gcpy_util.get_variables_from_dataset(refds, metvar_list)
+    devmet = gcpy_util.get_variables_from_dataset(devds, metvar_list)
 
     # ==================================================================
     # Make sure that all necessary species are found
     # ==================================================================
 
     # Get lists of variables names in datasets
-    vardict = util.compare_varnames(refds, devds, quiet=(not verbose))
+    vardict = bmk_util.compare_varnames(refds, devds, quiet=(not verbose))
     commonvars = vardict["commonvars3D"]
     refonly = vardict['refonly']
     devonly = vardict['devonly']
 
     # Narrow down the lists to only include species
-    commonspc = [v for v in commonvars if "SpeciesRst_" in v]
-    refonlyspc = [v for v in refonly if v.startswith('SpeciesRst_')]
-    devonlyspc = [v for v in devonly if v.startswith('SpeciesRst_')]
+    commonspc = [var for var in commonvars if "SpeciesRst_" in var]
+    refonlyspc = [var for var in refonly if var.startswith('SpeciesRst_')]
+    devonlyspc = [var for var in devonly if var.startswith('SpeciesRst_')]
 
     # Add ref only species to dev dataset with all nan values
     if refonlyspc:
-        for v in refonlyspc:
-            devds[v] = devds[commonspc[0]]
-            devds[v].data = np.full(devds[v].shape, np.nan)
-            devds[v].attrs['units'] = refds[v].units
-            commonspc.append(v)
+        for var in refonlyspc:
+            devds[var] = devds[commonspc[0]]
+            devds[var].data = np.full(devds[var].shape, np.nan)
+            devds[var].attrs['units'] = refds[var].units
+            commonspc.append(var)
 
     # Add dev only species to ref dataset with all nan values
     if devonlyspc:
-        for v in devonlyspc:
-            refds[v] = refds[commonspc[0]]
-            refds[v].data = np.full(refds[v].shape, np.nan)
-            devds[v].attrs['units'] = refds[v].units
-            commonspc.append(v)
+        for var in devonlyspc:
+            refds[var] = refds[commonspc[0]]
+            refds[var].data = np.full(refds[var].shape, np.nan)
+            devds[var].attrs['units'] = refds[var].units
+            commonspc.append(var)
 
     # Set list of variables to print in mass table. If this list was passed
     # as argument, check that all the vars are now in commonspc to ensure
     # in both datasets.
     if varlist:
-        for v in varlist:
-            if v not in commonspc:
-                raise ValueError(
-                    f"{dst} folder error: Variable {v} in varlist passed to make_benchmark_mass_tables is not present in Ref and Dev datasets"
-                )
+        for var in varlist:
+            if var not in commonspc:
+                msg = f"{dst} folder error: Variable {v} in varlist passed "
+                msg += "to make_benchmark_mass_tables is not present in "
+                msg += "Ref and Dev datasets"
+                raise ValueError(msg)
     else:
         varlist = commonspc
 
@@ -3181,7 +3254,7 @@ def make_benchmark_mass_accumulation_tables(
         overwrite=False,
         verbose=False,
         label="at end of simulation",
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates a text file containing global mass totals by species and
@@ -3260,49 +3333,49 @@ def make_benchmark_mass_accumulation_tables(
     # Read data from netCDF into Dataset objects
     # ==================================================================
 
-    print('Creating mass accumulation tables from four restart files:')
-    print('   Ref start: {}'.format(ref_start))
-    print('   Ref end:   {}'.format(ref_end))
-    print('   Dev start: {}'.format(dev_start))
-    print('   Dev end:   {}'.format(dev_end))
+    print("Creating mass accumulation tables from four restart files:")
+    print(f"   Ref start: {ref_start}")
+    print(f"   Ref end:   {ref_end}")
+    print(f"   Dev start: {dev_start}")
+    print(f"   Dev end:   {dev_end}")
 
     # Read data
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=xr.SerializationWarning)
-        refSds = xr.open_dataset(ref_start, drop_variables=skip_these_vars)
-        refEds = xr.open_dataset(ref_end, drop_variables=skip_these_vars)
-        devSds = xr.open_dataset(dev_start, drop_variables=skip_these_vars)
-        devEds = xr.open_dataset(dev_end, drop_variables=skip_these_vars)
+        ref_s_ds = xr.open_dataset(ref_start, drop_variables=skip_these_vars)
+        ref_e_ds = xr.open_dataset(ref_end, drop_variables=skip_these_vars)
+        dev_s_ds = xr.open_dataset(dev_start, drop_variables=skip_these_vars)
+        dev_e_ds = xr.open_dataset(dev_end, drop_variables=skip_these_vars)
 
     # ==================================================================
     # Update GCHP restart dataset if needed
     # ==================================================================
 
     # Ref
-    if any(v.startswith("SPC_") for v in refSds.data_vars.keys()):
-        refSds = util.rename_and_flip_gchp_rst_vars(refSds)
-    if any(v.startswith("SPC_") for v in refEds.data_vars.keys()):
-        refEds = util.rename_and_flip_gchp_rst_vars(refEds)
+    if any(var.startswith("SPC_") for var in ref_s_ds.data_vars.keys()):
+        ref_s_ds = gcpy_util.rename_and_flip_gchp_rst_vars(ref_s_ds)
+    if any(var.startswith("SPC_") for var in ref_e_ds.data_vars.keys()):
+        ref_e_ds = gcpy_util.rename_and_flip_gchp_rst_vars(ref_e_ds)
 
     # Dev
-    if any(v.startswith("SPC_") for v in devSds.data_vars.keys()):
-        devSds = util.rename_and_flip_gchp_rst_vars(devSds)
-    if any(v.startswith("SPC_") for v in devEds.data_vars.keys()):
-        devEds = util.rename_and_flip_gchp_rst_vars(devEds)
+    if any(var.startswith("SPC_") for var in dev_s_ds.data_vars.keys()):
+        dev_s_ds = gcpy_util.rename_and_flip_gchp_rst_vars(dev_s_ds)
+    if any(var.startswith("SPC_") for var in dev_e_ds.data_vars.keys()):
+        dev_e_ds = gcpy_util.rename_and_flip_gchp_rst_vars(dev_e_ds)
 
     # Add area to start restart dataset if area in end but not start
     # Need to consider area variable names used in both GC-Classic and GCHP
     # Should put this in a function (todo)
-    refSkeys = refSds.data_vars.keys()
-    refEkeys = refEds.data_vars.keys()
-    devSkeys = devSds.data_vars.keys()
-    devEkeys = devEds.data_vars.keys()
-    areaVars = ["Met_AREAM2", "AREA"]
-    for areaVar in areaVars:
-        if areaVar in refEkeys and areaVar not in refSkeys:
-            refSds[areaVar] = refEds[areaVar]
-        if areaVar in devEkeys and areaVar not in devSkeys:
-            devSds[areaVar] = devEds[areaVar]
+    ref_s_keys = ref_s_ds.data_vars.keys()
+    ref_e_keys = ref_e_ds.data_vars.keys()
+    dev_s_keys = dev_s_ds.data_vars.keys()
+    dev_e_keys = dev_e_ds.data_vars.keys()
+    area_vars = ["Met_AREAM2", "AREA"]
+    for area_var in area_vars:
+        if area_var in ref_e_keys:
+            ref_s_ds[area_var] = ref_e_ds[area_var]
+        if area_var in dev_e_keys and area_var not in dev_s_keys:
+            dev_s_ds[area_var] = dev_e_ds[area_var]
 
     # ==================================================================
     # Make sure that all necessary meteorological variables are found
@@ -3311,67 +3384,68 @@ def make_benchmark_mass_accumulation_tables(
         warnings.filterwarnings("ignore", category=xr.SerializationWarning)
 
         # Find the area variable in Ref
-        refs_area = util.get_area_from_dataset(refSds)
-        refe_area = util.get_area_from_dataset(refEds)
+        refs_area = gcpy_util.get_area_from_dataset(ref_s_ds)
+        refe_area = gcpy_util.get_area_from_dataset(ref_e_ds)
 
         # Find the area variable in Dev
-        devs_area = util.get_area_from_dataset(devSds)
-        deve_area = util.get_area_from_dataset(devEds)
+        devs_area = gcpy_util.get_area_from_dataset(dev_s_ds)
+        deve_area = gcpy_util.get_area_from_dataset(dev_e_ds)
 
     # Find required meteorological variables in Ref
     # (or exit with an error if we can't find them)
     metvar_list = ["Met_DELPDRY", "Met_BXHEIGHT", "Met_TropLev"]
-    refsmet = util.get_variables_from_dataset(refSds, metvar_list)
-    refemet = util.get_variables_from_dataset(refEds, metvar_list)
-    devsmet = util.get_variables_from_dataset(devSds, metvar_list)
-    devemet = util.get_variables_from_dataset(devEds, metvar_list)
+    refsmet = gcpy_util.get_variables_from_dataset(ref_s_ds, metvar_list)
+    refemet = gcpy_util.get_variables_from_dataset(ref_e_ds, metvar_list)
+    devsmet = gcpy_util.get_variables_from_dataset(dev_s_ds, metvar_list)
+    devemet = gcpy_util.get_variables_from_dataset(dev_e_ds, metvar_list)
 
     # ==================================================================
     # Make sure that all necessary species are found
     # ==================================================================
 
     # Get lists of variables names in datasets
-    vardict = util.compare_varnames(refSds, devSds, quiet=(not verbose))
+    vardict = bmk_util.compare_varnames(ref_s_ds, dev_s_ds, quiet=(not verbose))
     commonvars = vardict["commonvars3D"]
     refonly = vardict['refonly']
     devonly = vardict['devonly']
 
     # Narrow down the lists to only include species
-    commonspc = [v for v in commonvars if "SpeciesRst_" in v]
-    refonlyspc = [v for v in refonly if v.startswith('SpeciesRst_')]
-    devonlyspc = [v for v in devonly if v.startswith('SpeciesRst_')]
+    commonspc = [var for var in commonvars if "SpeciesRst_" in var]
+    refonlyspc = [var for var in refonly if var.startswith('SpeciesRst_')]
+    devonlyspc = [var for var in devonly if var.startswith('SpeciesRst_')]
 
     # Add ref only species to dev dataset with all nan values
     if refonlyspc:
-        for v in refonlyspc:
-            devSds[v] = devSds[commonspc[0]]
-            devSds[v].data = np.full(devSds[v].shape, np.nan)
-            devSds[v].attrs['units'] = refSds[v].units
-            devEds[v] = devEds[commonspc[0]]
-            devEds[v].data = np.full(devEds[v].shape, np.nan)
-            devEds[v].attrs['units'] = refEds[v].units
-            commonspc.append(v)
+        for var in refonlyspc:
+            dev_s_ds[var] = dev_s_ds[commonspc[0]]
+            dev_s_ds[var].data = np.full(dev_s_ds[var].shape, np.nan)
+            dev_s_ds[var].attrs['units'] = ref_s_ds[var].units
+            dev_e_ds[var] = dev_e_ds[commonspc[0]]
+            dev_e_ds[var].data = np.full(dev_e_ds[var].shape, np.nan)
+            dev_e_ds[var].attrs['units'] = ref_e_ds[var].units
+            commonspc.append(var)
 
     # Add dev only species to ref dataset with all nan values
     if devonlyspc:
-        for v in devonlyspc:
-            refSds[v] = refSds[commonspc[0]]
-            refSds[v].data = np.full(refSds[v].shape, np.nan)
-            devSds[v].attrs['units'] = refSds[v].units
-            refEds[v] = refEds[commonspc[0]]
-            refEds[v].data = np.full(refEds[v].shape, np.nan)
-            devEds[v].attrs['units'] = refEds[v].units
-            commonspc.append(v)
+        for var in devonlyspc:
+            ref_s_ds[var] = ref_s_ds[commonspc[0]]
+            ref_s_ds[var].data = np.full(ref_s_ds[var].shape, np.nan)
+            dev_s_ds[var].attrs['units'] = ref_s_ds[var].units
+            ref_e_ds[var] = ref_e_ds[commonspc[0]]
+            ref_e_ds[var].data = np.full(ref_e_ds[var].shape, np.nan)
+            dev_e_ds[var].attrs['units'] = ref_e_ds[var].units
+            commonspc.append(var)
 
     # Set list of variables to print in mass table. If this list was passed
     # as argument, check that all the vars are now in commonspc to ensure
     # in both datasets.
     if varlist:
-        for v in varlist:
-            if v not in commonspc:
-                raise ValueError(
-                    f"{dst} folder error: Variable {v} in varlist passed to make_benchmark_mass_tables is not present in Ref and Dev datasets"
-                )
+        for var in varlist:
+            if var not in commonspc:
+                msg =  f"{dst} folder error: Variable {var} in varlist "
+                msg += "passed to make_benchmark_mass_tables is not present "
+                msg += "in Ref and Dev datasets"
+                raise ValueError(msg)
     else:
         varlist = commonspc
 
@@ -3418,12 +3492,12 @@ def make_benchmark_mass_accumulation_tables(
         mass_filename = "GlobalMassAccumulation_TropStrat.txt"
     mass_file = os.path.join(dst, mass_filename)
     create_mass_accumulation_table(
-        refSds,
-        refEds,
+        ref_s_ds,
+        ref_e_ds,
         refstr,
         refperiodstr,
-        devSds,
-        devEds,
+        dev_s_ds,
+        dev_e_ds,
         devstr,
         devperiodstr,
         varlist,
@@ -3443,11 +3517,11 @@ def make_benchmark_mass_accumulation_tables(
     #    mass_filename = 'GlobalMassAccumulation_Trop.txt'
     #mass_file = os.path.join(dst, mass_filename)
     #create_mass_accumulation_table(
-    #    refSds,
-    #    refEds,
+    #    ref_s_ds,
+    #    ref_e_ds,
     #    refstr,
-    #    devSds,
-    #    devEds,
+    #    dev_s_ds,
+    #    dev_e_ds,
     #    devstr,
     #    varlist,
     #    met_and_masks,
@@ -3461,10 +3535,10 @@ def make_benchmark_mass_accumulation_tables(
     # -------------------------------------------
     # Clean up
     # -------------------------------------------
-    del refSds
-    del refEds
-    del devSds
-    del devEds
+    del ref_s_ds
+    del ref_e_ds
+    del dev_s_ds
+    del dev_e_ds
     gc.collect()
 
 
@@ -3511,7 +3585,7 @@ def make_benchmark_oh_metrics(
     # ==================================================================
     # Define destination directory
     # ==================================================================
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # ==================================================================
     # Read data from netCDF into Dataset objects
@@ -3539,8 +3613,8 @@ def make_benchmark_oh_metrics(
         "Met_TropLev",
         "FracOfTimeInTrop",
     ]
-    refmet = util.get_variables_from_dataset(refmetds, metvar_list)
-    devmet = util.get_variables_from_dataset(devmetds, metvar_list)
+    refmet = gcpy_util.get_variables_from_dataset(refmetds, metvar_list)
+    devmet = gcpy_util.get_variables_from_dataset(devmetds, metvar_list)
 
     # Create the mask arrays for the troposphere for Ref and Dev
     ref_tropmask = get_troposphere_mask(refmetds)
@@ -3645,14 +3719,15 @@ def make_benchmark_oh_metrics(
     #  Define function for writing metrics to file
     # ==================================================================
 
-    def print_metrics_to_file(f, title1, title2, ref, dev, diff, pctdiff):
-        print("#" * 79, file=f)
-        print(f"{title1 : <76}{'###'}", file=f)
-        print(f"{title2 : <76}{'###'}", file=f)
-        print("#" * 79, file=f)
-        print("'{Ref' : <15}{'Dev' : <13}{'Dev - Ref` : <13}{'% diff' : <11}",
-              file=f)
-        print("{ref:11.6f}  {dev:11.6f}  {diff:11.6f}  {pctdiff:9.4f}", file=f)
+    def print_metrics_to_file(ofile, title1, title2, ref, dev, diff, pctdiff):
+        print("#" * 79, file=ofile)
+        print(f"{title1 : <76}{'###'}", file=ofile)
+        print(f"{title2 : <76}{'###'}", file=ofile)
+        print("#" * 79, file=ofile)
+        print("{Ref' : <15}{'Dev' : <13}{'Dev - Ref` : <13}{'% diff' : <11}",
+              file=ofile)
+        print(f"{ref:11.6f}  {dev:11.6f}  {diff:11.6f}  {pctdiff:9.4f}",
+              file=ofile)
 
     # ==================================================================
     # Print metrics to file
@@ -3660,25 +3735,27 @@ def make_benchmark_oh_metrics(
 
     # Create file
     outfilename = os.path.join(dst, "OH_metrics.txt")
-    f = open(outfilename, "w")
+    with open(outfilename, "w", encoding="UTF-8") as ofile:
 
-    # Write mean OH
-    title1 = "### Global mass-weighted OH concentration [1e5 molec/cm3]"
-    title2 = f"### Ref = {refstr}; Dev = {devstr}"
-    print_metrics_to_file(f, title1, title2, ref_mean_oh, dev_mean_oh,
-                          oh_diff, oh_pctdiff)
+        # Write mean OH
+        title1 = "### Global mass-weighted OH concentration [1e5 molec/cm3]"
+        title2 = f"### Ref = {refstr}; Dev = {devstr}"
+        print_metrics_to_file(ofile, title1, title2, ref_mean_oh,
+                              dev_mean_oh, oh_diff, oh_pctdiff)
 
-    # Write MCF lifetime
-    title1 = "### MCF lifetime w/r/t tropospheric OH [years]"
-    title2 = f"### Ref = {refstr}; Dev = {devstr}"
-    print_metrics_to_file(f, title1, title2, ref_mcf_lifetime,
-                          dev_mcf_lifetime, mcf_diff, mcf_pctdiff)
+        # Write MCF lifetime
+        title1 = "### MCF lifetime w/r/t tropospheric OH [years]"
+        title2 = f"### Ref = {refstr}; Dev = {devstr}"
+        print_metrics_to_file(ofile, title1, title2, ref_mcf_lifetime,
+                              dev_mcf_lifetime, mcf_diff, mcf_pctdiff)
 
-    # Write CH4 lifetime
-    title1 = "### CH4 lifetime w/r/t tropospheric OH [years]"
-    title2 = f"### Ref = {refstr}; Dev = {devstr}"
-    print_metrics_to_file(f, title1, title2, ref_ch4_lifetime,
-                          dev_ch4_lifetime, ch4_diff, ch4_pctdiff)
+        # Write CH4 lifetime
+        title1 = "### CH4 lifetime w/r/t tropospheric OH [years]"
+        title2 = f"### Ref = {refstr}; Dev = {devstr}"
+        print_metrics_to_file(f, title1, title2, ref_ch4_lifetime,
+                              dev_ch4_lifetime, ch4_diff, ch4_pctdiff)
+
+        ofile.close()
 
     # -------------------------------------------
     # Clean up
@@ -3702,7 +3779,7 @@ def make_benchmark_wetdep_plots(
         overwrite=False,
         verbose=False,
         benchmark_type="TransportTracersBenchmark",
-        plots=["sfc", "500hpa", "zonalmean"],
+        plots=None,
         log_color_scale=False,
         normalize_by_area=False,
         areas=None,
@@ -3711,7 +3788,7 @@ def make_benchmark_wetdep_plots(
         weightsdir='.',
         n_job=-1,
         time_mean=False,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates PDF files containing plots of species concentration
@@ -3782,7 +3859,7 @@ def make_benchmark_wetdep_plots(
     """
 
     # Create destination plot directory
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # Make a collection subdirectory
     targetdst = os.path.join(dst, collection)
@@ -3796,7 +3873,7 @@ def make_benchmark_wetdep_plots(
             os.mkdir(targetdst)
 
     # Get the function that will read file(s) into a dataset
-    reader = util.dataset_reader(time_mean, verbose=verbose)
+    reader = gcpy_util.dataset_reader(time_mean, verbose=verbose)
 
     # Open datasets
     refds = reader(ref, drop_variables=skip_these_vars)
@@ -3812,12 +3889,16 @@ def make_benchmark_wetdep_plots(
 
     # Compute mean of data over the time dimension (if time_mean=True)
     if time_mean:
-        refds = util.dataset_mean(refds)
-        devds = util.dataset_mean(devds)
+        refds = gcpy_util.dataset_mean(refds)
+        devds = gcpy_util.dataset_mean(devds)
         if refmet is not None:
-            refmetds = util.dataset_mean(refmetds)
+            refmetds = gcpy_util.dataset_mean(refmetds)
         if devmet is not None:
-            devmetds = util.dataset_mean(devmetds)
+            devmetds = gcpy_util.dataset_mean(devmetds)
+
+    # Set default plot types
+    if plots is None:
+        plots=["sfc", "500hpa", "zonalmean"]
 
     # Make sure that Ref and Dev datasets have the same variables.
     # Variables that are in Ref but not in Dev will be added to Dev
@@ -3827,8 +3908,8 @@ def make_benchmark_wetdep_plots(
     #[refds, devds] = add_missing_variables(refds, devds)
 
     # Get list of variables in collection
-    vardict = util.compare_varnames(refds, devds, quiet=(not verbose))
-    varlist = [v for v in vardict["commonvars3D"] if collection + "_" in v]
+    vardict = bmk_util.compare_varnames(refds, devds, quiet=(not verbose))
+    varlist = [var for var in vardict["commonvars3D"] if collection + "_" in var]
     varlist.sort()
 
     # Surface plots
@@ -3855,7 +3936,7 @@ def make_benchmark_wetdep_plots(
             n_job=n_job,
             spcdb_dir=spcdb_dir
         )
-        util.add_bookmarks_to_pdf(
+        gcpy_util.add_bookmarks_to_pdf(
             pdfname,
             varlist,
             remove_prefix=collection + '_',
@@ -3885,7 +3966,7 @@ def make_benchmark_wetdep_plots(
             n_job=n_job,
             spcdb_dir=spcdb_dir
         )
-        util.add_bookmarks_to_pdf(
+        gcpy_util.add_bookmarks_to_pdf(
             pdfname,
             varlist,
             remove_prefix=collection + '_',
@@ -3917,7 +3998,7 @@ def make_benchmark_wetdep_plots(
             n_job=n_job,
             spcdb_dir=spcdb_dir
         )
-        util.add_bookmarks_to_pdf(
+        gcpy_util.add_bookmarks_to_pdf(
             pdfname,
             varlist,
             remove_prefix=collection + '_',
@@ -3947,7 +4028,7 @@ def make_benchmark_wetdep_plots(
             n_job=n_job,
             spcdb_dir=spcdb_dir
         )
-        util.add_bookmarks_to_pdf(
+        gcpy_util.add_bookmarks_to_pdf(
             pdfname,
             varlist,
             remove_prefix=collection + '_',
@@ -3975,7 +4056,7 @@ def make_benchmark_aerosol_tables(
         dst='./benchmark',
         overwrite=False,
         is_gchp=False,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Compute FullChemBenchmark aerosol budgets & burdens
@@ -4013,13 +4094,13 @@ def make_benchmark_aerosol_tables(
     """
 
     # Create destination directory
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # List of species (and subsets for the trop & strat)
     species_list = ["BCPI", "OCPI", "SO4", "DST1", "SALA", "SALC"]
 
     # Read the species database
-    spcdb = util.read_config_file(
+    spcdb = gcpy_util.read_config_file(
         os.path.join(
             spcdb_dir,
             "species_database.yml"
@@ -4029,23 +4110,20 @@ def make_benchmark_aerosol_tables(
 
     # Molecular weights [g mol-1], as taken from the species database
     mw = {}
-    for v in species_list:
-        mw[v] = spcdb[v]["MW_g"]
-    mw["Air"] = gcon.MW_AIR_g
+    for var in species_list:
+        mw[var] = spcdb[var]["MW_g"]
+    mw["Air"] = MW_AIR_g
 
     # Get the list of relevant AOD diagnostics from a YAML file
-    aod = util.read_config_file(
-        os.path.join(
-            os.path.dirname(__file__),
-            "aod_species.yml"
-        ),
+    aod = gcpy_util.read_config_file(
+        bcf.AOD_SPC_YAML,
         quiet=True
     )
 
-    aod_list = [v for v in aod.keys() if "Dust" in v or "Hyg" in v]
+    aod_list = [var for var in aod.keys() if "Dust" in var or "Hyg" in var]
     # different names for GCHP
     if is_gchp:
-        aod_list = [v.replace('550nm', 'WL1') for v in aod_list]
+        aod_list = [var.replace('550nm', 'WL1') for var in aod_list]
     # Descriptive names
     spc2name = {"BCPI": "Black Carbon",
                 "DST1": "Dust",
@@ -4082,10 +4160,10 @@ def make_benchmark_aerosol_tables(
 
     # Rename SpeciesConc_ to SpeciesConcVV_ for consistency with new
     # naming introduced in GEOS-Chem 14.1.0
-    for v in ds_spc.data_vars.keys():
-        if v.startswith('SpeciesConc_'):
-            spc = v.replace('SpeciesConc_', '')
-            ds_spc = ds_spc.rename({v: 'SpeciesConcVV_' + spc})
+    for var in ds_spc.data_vars.keys():
+        if var.startswith('SpeciesConc_'):
+            spc = var.replace('SpeciesConc_', '')
+            ds_spc = ds_spc.rename({var: 'SpeciesConcVV_' + spc})
 
     # Get troposphere mask
     tropmask = get_troposphere_mask(ds_met)
@@ -4134,21 +4212,21 @@ def make_benchmark_aerosol_tables(
     # ------------------------------
     def print_aerosol_metrics(data, species_list, filename, title, label):
 
-        with open(filename, "w+") as f:
+        with open(filename, "w+", encoding="UTF-8") as ofile:
 
             # Print top header
-            print("%" * 79, file=f)
+            print("%" * 79, file=ofile)
             print(f" {title} for {year} in {devstr}")
-            print(" (weighted by the number of days per month)", file=f)
-            print("%" * 79, file=f)
+            print(" (weighted by the number of days per month)", file=ofile)
+            print("%" * 79, file=ofile)
             line = "\n" + " " * 40 + "Strat         Trop         Strat+Trop\n"
             line += " " * 40 + "-----------   ----------   ----------"
-            print(line, file=f)
+            print(line, file=ofile)
 
             # Print data
             for spc in species_list:
                 line = f"{spc2name[spc] : <17} ({spc : <4}) {label} :  {data[spc + '_s']:11.9f}   {data[spc + '_t']:10.8f}   {data[spc + '_f']:10.8f}\n"
-                print(line, file=f)
+                print(line, file=ofile)
 
     # --------------------------------------
     # Compute aerosol burdens [Tg] and print
@@ -4266,9 +4344,8 @@ def make_benchmark_operations_budget(
         dev_interval,
         benchmark_type=None,
         label=None,
-        col_sections=["Full", "Trop", "PBL", "Strat"],
-        operations=["Chemistry", "Convection", "EmisDryDep",
-                    "Mixing", "Transport", "WetDep"],
+        col_sections=None,
+        operations=None,
         compute_accum=True,
         compute_restart=False,
         require_overlap=False,
@@ -4276,7 +4353,7 @@ def make_benchmark_operations_budget(
         species=None,
         overwrite=True,
         verbose=False,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Prints the "operations budget" (i.e. change in mass after
@@ -4351,6 +4428,13 @@ def make_benchmark_operations_budget(
             Directory of species_datbase.yml file
             Default value: /path/to/gcpy/benchmark/config
     """
+
+    # Set defaults
+    if col_sections is None:
+        col_sections=["Full", "Trop", "PBL", "Strat"]
+    if operations is None:
+        operations=["Chemistry", "Convection", "EmisDryDep",
+                    "Mixing", "Transport", "WetDep"]
 
     # ------------------------------------------
     # Column sections
@@ -4434,15 +4518,15 @@ def make_benchmark_operations_budget(
     # ------------------------------------------
 
     # Get information about variables in data files
-    vardict = util.compare_varnames(ref_ds, dev_ds, quiet=True)
+    vardict = bmk_util.compare_varnames(ref_ds, dev_ds, quiet=True)
     refonly = vardict["refonly"]
     devonly = vardict["devonly"]
     cmnvars = vardict["commonvars2D"]
 
     # Reduce each list to only variables containing "Budget" and not "Strat"
-    refonly = [v for v in refonly if "Budget" in v and "Strat" not in v]
-    devonly = [v for v in devonly if "Budget" in v and "Strat" not in v]
-    cmnvars = [v for v in cmnvars if "Budget" in v and "Strat" not in v]
+    refonly = [var for var in refonly if "Budget" in var and "Strat" not in var]
+    devonly = [var for var in devonly if "Budget" in var and "Strat" not in var]
+    cmnvars = [var for var in cmnvars if "Budget" in var and "Strat" not in var]
 
     # Get the species list, depending on if species was passed as argument.
     if species is not None:
@@ -4454,9 +4538,9 @@ def make_benchmark_operations_budget(
         # present for as few as one operation.
         spclists = {}
         for gc_section in gc_sections:
-            refspc = [v.split("_")[1] for v in refonly if gc_section in v]
-            devspc = [v.split("_")[1] for v in devonly if gc_section in v]
-            cmnspc = [v.split("_")[1] for v in cmnvars if gc_section in v]
+            refspc = [var.split("_")[1] for var in refonly if gc_section in var]
+            devspc = [var.split("_")[1] for var in devonly if gc_section in var]
+            cmnspc = [var.split("_")[1] for var in cmnvars if gc_section in var]
             if require_overlap:
                 section_spc = list(set(cmnspc))
             else:
@@ -4475,8 +4559,8 @@ def make_benchmark_operations_budget(
         # is implemented then handling of optional species list needs to be
         # revisited.
         spclist = []
-        for s in spclists:
-            spclist = spclist + spclists[s]
+        for spc in spclists:
+            spclist = spclist + spclists[spc]
 
     # Make list items unique and put in alphabetical order
     spclist = list(set(spclist))
@@ -4488,9 +4572,9 @@ def make_benchmark_operations_budget(
     # ------------------------------------------
 
     # Load a YAML file containing species properties
-    spc_properties = util.read_config_file(
+    spc_properties = gcpy_util.read_config_file(
         os.path.join(
-            os.path.dirname(__file__),
+            spcdb_dir,
             "species_database.yml"
         ),
         quiet=True
@@ -4548,7 +4632,7 @@ def make_benchmark_operations_budget(
     }
 
     # Create the dataframe from the data dictionary and column names list
-    df = pd.DataFrame(data, columns=columns)
+    dframe = pd.DataFrame(data, columns=columns)
 
     # ------------------------------------------
     # Populate dataframe for GEOS-Chem operations and column sections
@@ -4569,10 +4653,10 @@ def make_benchmark_operations_budget(
             for gc_operation in gc_operations:
 
                 # Get the dataframe row to fill. Skip if not found.
-                dfrow = (df["Column_Section"] == gc_section) \
-                    & (df["Species"] == spc) \
-                    & (df["Operation"] == gc_operation)
-                if not any(dfrow):
+                dframerow = (dframe["Column_Section"] == gc_section) \
+                    & (dframe["Species"] == spc) \
+                    & (dframe["Operation"] == gc_operation)
+                if not any(dframerow):
                     continue
 
                 # Get the variable name in the datasets
@@ -4608,13 +4692,13 @@ def make_benchmark_operations_budget(
                     pctdiff = np.nan
 
                 # Fill dataframe
-                df.loc[dfrow, "Ref_raw"] = refraw
-                df.loc[dfrow, "Dev_raw"] = devraw
-                df.loc[dfrow, "Units_converted"] = units[spc]
-                df.loc[dfrow, "Ref"] = refconv
-                df.loc[dfrow, "Dev"] = devconv
-                df.loc[dfrow, "Diff"] = diff
-                df.loc[dfrow, "Pct_diff"] = pctdiff
+                dframe.loc[dframerow, "Ref_raw"] = refraw
+                dframe.loc[dframerow, "Dev_raw"] = devraw
+                dframe.loc[dframerow, "Units_converted"] = units[spc]
+                dframe.loc[dframerow, "Ref"] = refconv
+                dframe.loc[dframerow, "Dev"] = devconv
+                dframe.loc[dframerow, "Diff"] = diff
+                dframe.loc[dframerow, "Pct_diff"] = pctdiff
 
     # ------------------------------------------
     # Compute Strat for each data operation (if applicable)
@@ -4633,32 +4717,32 @@ def make_benchmark_operations_budget(
             for gc_operation in gc_operations:
 
                 # Get the strat dataframe row to fill. Skip if not found.
-                dfrow = (df["Column_Section"] == "Strat") \
-                    & (df["Species"] == spc) \
-                    & (df["Operation"] == gc_operation)
-                if not any(dfrow):
+                dframerow = (dframe["Column_Section"] == "Strat") \
+                    & (dframe["Species"] == spc) \
+                    & (dframe["Operation"] == gc_operation)
+                if not any(dframerow):
                     continue
 
                 # Get the "Full" row to use in the calculation
-                dfrow_full = (df["Column_Section"] == "Full") \
-                    & (df["Species"] == spc) \
-                    & (df["Operation"] == gc_operation)
-                if not any(dfrow_full):
+                dframerow_full = (dframe["Column_Section"] == "Full") \
+                    & (dframe["Species"] == spc) \
+                    & (dframe["Operation"] == gc_operation)
+                if not any(dframerow_full):
                     continue
 
                 # Get the "Trop" row to use in the calculation
-                dfrow_trop = (df["Column_Section"] == "Trop") \
-                    & (df["Species"] == spc) \
-                    & (df["Operation"] == gc_operation)
-                if not any(dfrow_trop):
+                dframerow_trop = (dframe["Column_Section"] == "Trop") \
+                    & (dframe["Species"] == spc) \
+                    & (dframe["Operation"] == gc_operation)
+                if not any(dframerow_trop):
                     continue
 
                 # Calculate strat concentrations as Full minus Trop. Do
                 # not bother with raw value computation.
-                refstrat = df.loc[dfrow_full, "Ref"].values[0] \
-                    - df.loc[dfrow_trop, "Ref"].values[0]
-                devstrat = df.loc[dfrow_full, "Dev"].values[0] \
-                    - df.loc[dfrow_trop, "Dev"].values[0]
+                refstrat = dframe.loc[dframerow_full, "Ref"].values[0] \
+                    - dframe.loc[dframerow_trop, "Ref"].values[0]
+                devstrat = dframe.loc[dframerow_full, "Dev"].values[0] \
+                    - dframe.loc[dframerow_trop, "Dev"].values[0]
 
                 # Calculate diff and % diff
                 if not np.isnan(refstrat) and not np.isnan(devstrat):
@@ -4672,11 +4756,11 @@ def make_benchmark_operations_budget(
                     pctdiff = np.nan
 
                 # Fill dataframe
-                df.loc[dfrow, "Units_converted"] = units[spc]
-                df.loc[dfrow, "Ref"] = refstrat
-                df.loc[dfrow, "Dev"] = devstrat
-                df.loc[dfrow, "Diff"] = diff
-                df.loc[dfrow, "Pct_diff"] = pctdiff
+                dframe.loc[dframerow, "Units_converted"] = units[spc]
+                dframe.loc[dframerow, "Ref"] = refstrat
+                dframe.loc[dframerow, "Dev"] = devstrat
+                dframe.loc[dframerow, "Diff"] = diff
+                dframe.loc[dframerow, "Pct_diff"] = pctdiff
 
     # ------------------------------------------
     # Compute Accumulation for each column section (if applicable)
@@ -4695,21 +4779,21 @@ def make_benchmark_operations_budget(
                     print(f"  {col_section}: species {i + 1} of {n_spc}")
 
                 # Get the accumulation dataframe row to fill.Skip if not found.
-                dfrow = (df["Column_Section"] == col_section) \
-                    & (df["Species"] == spc) \
-                    & (df["Operation"] == "ACCUMULATION")
-                if not any(dfrow):
+                dframerow = (dframe["Column_Section"] == col_section) \
+                    & (dframe["Species"] == spc) \
+                    & (dframe["Operation"] == "ACCUMULATION")
+                if not any(dframerow):
                     continue
 
                 # Get the rows to sum
-                dfrows_to_sum = (df["Column_Section"] == col_section) \
-                    & (df["Species"] == spc) \
-                    & (df["Operation"].isin(gc_operations))
+                dframerows_to_sum = (dframe["Column_Section"] == col_section) \
+                    & (dframe["Species"] == spc) \
+                    & (dframe["Operation"].isin(gc_operations))
 
                 # Sum the concentrations. If there is one or more NaN values
                 # then set to NaN since not enough data for accumulation.
-                refsum = df.loc[dfrows_to_sum, "Ref"].sum()
-                devsum = df.loc[dfrows_to_sum, "Dev"].sum()
+                refsum = dframe.loc[dframerows_to_sum, "Ref"].sum()
+                devsum = dframe.loc[dframerows_to_sum, "Dev"].sum()
 
                 # Calculate diff and % diff
                 if not np.isnan(refsum) and not np.isnan(devsum):
@@ -4723,11 +4807,11 @@ def make_benchmark_operations_budget(
                     pctdiff = np.nan
 
                 # Fill dataframe
-                df.loc[dfrow, "Units_converted"] = units[spc]
-                df.loc[dfrow, "Ref"] = refsum
-                df.loc[dfrow, "Dev"] = devsum
-                df.loc[dfrow, "Diff"] = diff
-                df.loc[dfrow, "Pct_diff"] = pctdiff
+                dframe.loc[dframerow, "Units_converted"] = units[spc]
+                dframe.loc[dframerow, "Ref"] = refsum
+                dframe.loc[dframerow, "Dev"] = devsum
+                dframe.loc[dframerow, "Diff"] = diff
+                dframe.loc[dframerow, "Pct_diff"] = pctdiff
 
     # ------------------------------------------
     # Compute mass change in restarts for each column section (if applicable)
@@ -4737,7 +4821,7 @@ def make_benchmark_operations_budget(
 
         # Load a YAML file containing species properties (such as
         # molecular weights), which we will need for unit conversions.
-        properties = util.read_config_file(
+        properties = gcpy_util.read_config_file(
             os.path.join(
                 spcdb_dir,
                 "species_database.yml"
@@ -4757,10 +4841,10 @@ def make_benchmark_operations_budget(
 
                 # Get the accumulation dataframe row to fill. Skip if not found
                 # of if not Full column section.
-                dfrow = (df["Column_Section"] == "Full") \
-                    & (df["Species"] == spc) \
-                    & (df["Operation"] == "RESTART")
-                if not any(dfrow):
+                dframerow = (dframe["Column_Section"] == "Full") \
+                    & (dframe["Species"] == spc) \
+                    & (dframe["Operation"] == "RESTART")
+                if not any(dframerow):
                     continue
 
                 # Get ref and dev mass
@@ -4769,10 +4853,9 @@ def make_benchmark_operations_budget(
                 species_properties = properties.get(spc)
                 if species_properties is None:
                     continue
-                else:
-                    mol_wt_g = species_properties.get("MW_g")
-                    if mol_wt_g is None:
-                        continue
+                mol_wt_g = species_properties.get("MW_g")
+                if mol_wt_g is None:
+                    continue
 
                 # Specify target units
                 target_units = "Gg"
@@ -4781,8 +4864,8 @@ def make_benchmark_operations_budget(
                 # Convert units of Ref and save to a DataArray
                 # (or skip if Ref contains NaNs everywhere)
                 # ==============================================================
-                refarray = refdata[v]
-                if not np.isnan(refdata[v].values).all():
+                refarray = ref_ds[spc]
+                if not np.isnan(ref_ds[spc].values).all():
                     refarray = convert_units(
                         refarray,
                         spc,
@@ -4797,8 +4880,8 @@ def make_benchmark_operations_budget(
                 # Convert units of Dev and save to a DataArray
                 # (or skip if Dev contains NaNs everywhere)
                 # ==============================================================
-                devarray = devdata[v]
-                if not np.isnan(devdata[v].values).all():
+                devarray = dev_ds[spc]
+                if not np.isnan(dev_ds[spc].values).all():
                     devarray = convert_units(
                         devarray,
                         spc_name,
@@ -4828,32 +4911,33 @@ def make_benchmark_operations_budget(
                     pctdiff = np.nan
 
                 # Fill dataframe
-                df.loc[dfrow, "Units_converted"] = units[spc]
-                df.loc[dfrow, "Ref"] = refmass
-                df.loc[dfrow, "Dev"] = devmass
-                df.loc[dfrow, "Diff"] = diff
-                df.loc[dfrow, "Pct_diff"] = pctdiff
+                dframe.loc[dframerow, "Units_converted"] = units[spc]
+                dframe.loc[dframerow, "Ref"] = refmass
+                dframe.loc[dframerow, "Dev"] = devmass
+                dframe.loc[dframerow, "Diff"] = diff
+                dframe.loc[dframerow, "Pct_diff"] = pctdiff
 
     #  Sanity check write to csv (for testing. Keep commented out otherwise)
-    #df.to_csv('df.csv', na_rep='NA')
+    #dframe.to_csv('dframe.csv', na_rep='NA')
 
     # ------------------------------------------
     # Make budget file
     # ------------------------------------------
 
     # Create the target output directory hierarchy if it doesn't already exist
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # Print budgets to file
     filename = f"{dst}/Budgets_After_Operations.txt"
-    with open(filename, "w+") as f:
-        print("#" * 78, file=f)
+    with open(filename, "w+", encoding="UTF-8") as ofile:
+        print("#" * 78, file=ofile)
         if label is not None and benchmark_type is not None:
-            print(f"{benchmark_type} budgets for {label}", file=f)
+            print(f"{benchmark_type} budgets for {label}", file=ofile)
         else:
-            print(f"Budgets across {ref_interval}/{dev_interval} sec", file=f)
-        print("\n", file=f)
-        print("NOTES:", file=f)
+            print(f"Budgets across {ref_interval}/{dev_interval} sec",
+                  file=ofile)
+        print("\n", file=ofile)
+        print("NOTES:", file=ofile)
         msg = " - When using the non-local mixing scheme (default), "\
               "'Mixing' includes\n   emissions and dry deposition "\
               "applied below the PBL. 'EmisDryDep'\n   therefore only "\
@@ -4862,28 +4946,28 @@ def make_benchmark_operations_budget(
               "are calculated as the sum of [kg/s] tendencies\n - Strat "\
               "budget is calculated as Full minus Trop\n - ACCUMULATION "\
               "is calculated as sum of all other operations"
-        print(msg, file=f)
-        print("#" * 78, file=f)
-        print(file=f)
+        print(msg, file=ofile)
+        print("#" * 78, file=ofile)
+        print(file=ofile)
 
         # Loop over species
         for i, spc in enumerate(spclist):
-            print(f"{spc} budgets (Ref={refstr}; Dev={devstr})", file=f)
+            print(f"{spc} budgets (Ref={refstr}; Dev={devstr})", file=ofile)
 
             # Print a table for each column section
             for col_section in col_sections:
 
                 # Get the dataframe rows. Skip if none found.
-                dfrows = (df["Column_Section"] == col_section) \
-                    & (df["Species"] == spc) \
-                    & (df["Operation"].isin(all_operations))
-                if not any(dfrows):
+                dframerows = (dframe["Column_Section"] == col_section) \
+                    & (dframe["Species"] == spc) \
+                    & (dframe["Operation"].isin(all_operations))
+                if not any(dframerows):
                     continue
 
                 # Print dataframe subset to file
-                print(f"{col_section} {units[spc]} : {spc}", file=f)
+                print(f"{col_section} {units[spc]} : {spc}", file=ofile)
                 print(tabulate(
-                    df.loc[dfrows,
+                    dframe.loc[dframerows,
                            ["Operation",
                             "Ref",
                             "Dev",
@@ -4893,14 +4977,14 @@ def make_benchmark_operations_budget(
                     tablefmt='psql',
                     showindex=False,
                     floatfmt=(".5f", ".5f", ".5f", ".5f", ".5f"),
-                ), file=f
+                ), file=ofile
             )
-            print("\n", file=f)
+            print("\n", file=ofile)
 
     # ------------------------------------------
     # Clean up
     # ------------------------------------------
-    del df
+    del dframe
     del ref_ds
     del dev_ds
     gc.collect()
@@ -4912,7 +4996,7 @@ def make_benchmark_mass_conservation_table(
         dst="./benchmark",
         overwrite=False,
         areapath=None,
-        spcdb_dir=config_dir
+        spcdb_dir=bcf.CONFIG_DIR
 ):
     """
     Creates a text file containing global mass of the PassiveTracer
@@ -4955,11 +5039,11 @@ def make_benchmark_mass_conservation_table(
     # ==================================================================
 
     # Create the destination folder
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # Load a YAML file containing species properties (such as
     # molecular weights), which we will need for unit conversions.
-    properties = util.read_config_file(
+    properties = gcpy_util.read_config_file(
         os.path.join(
             spcdb_dir,
             "species_database.yml"
@@ -4989,8 +5073,8 @@ def make_benchmark_mass_conservation_table(
     # ==================================================================
     # Calculate global mass for the tracer at all restart dates
     # ==================================================================
-    for f in datafiles:
-        ds = xr.open_dataset(f, drop_variables=skip_these_vars)
+    for ifile in datafiles:
+        dset = xr.open_dataset(ifile, drop_variables=skip_these_vars)
 
         # Save date in desired format
         #datestr = str(pd.to_datetime(ds.time.values[0]))
@@ -4998,9 +5082,9 @@ def make_benchmark_mass_conservation_table(
 
         # Find the area variable in Dev
         if areapath is None:
-            area = util.get_area_from_dataset(ds)
+            area = gcpy_util.get_area_from_dataset(dset)
         else:
-            area = util.get_area_from_dataset(
+            area = gcpy_util.get_area_from_dataset(
                 xr.open_dataset(
                     areapath,
                     drop_variables=skip_these_vars
@@ -5009,27 +5093,29 @@ def make_benchmark_mass_conservation_table(
 
         # Assume typical restart file name format, but avoid using dates
         # from within files which may be incorrect for the initial restart
-        datestr = f.split('/')[-1].split('.')[2][:9]
+        datestr = ifile.split('/')[-1].split('.')[2][:9]
         dates.append(datestr[:4] + '-' + datestr[4:6] + '-' + datestr[6:8])
 
         # Select for GCC or GCHP
-        delta_p = ds['Met_DELPDRY'] if 'Met_DELPDRY' in list(ds.data_vars) else ds['DELP_DRY']
+        delta_p = dset['Met_DELPDRY'] \
+            if 'Met_DELPDRY' in list(dset.data_vars) \
+            else dset['DELP_DRY']
 
         # ==============================================================
         # Convert units of Ref and save to a DataArray
         # (or skip if Ref contains NaNs everywhere)
         # ==============================================================
         # Select for GCC or GCHP
-        if 'SpeciesRst_PassiveTracer' in list(ds.data_vars):
-            attrs = ds['SpeciesRst_PassiveTracer'].attrs
-            da = ds['SpeciesRst_PassiveTracer'].astype(np.float64)
-            da.attrs = attrs
+        if 'SpeciesRst_PassiveTracer' in list(dset.data_vars):
+            attrs = dset['SpeciesRst_PassiveTracer'].attrs
+            darr = dset['SpeciesRst_PassiveTracer'].astype(np.float64)
+            darr.attrs = attrs
         else:
-            attrs = ds['SPC_PassiveTracer'].attrs
-            da = ds['SPC_PassiveTracer'].astype(np.float64)
-            da.attrs = attrs
-        da = convert_units(
-            da,
+            attrs = dset['SPC_PassiveTracer'].attrs
+            darr = dset['SPC_PassiveTracer'].astype(np.float64)
+            darr.attrs = attrs
+        darr = convert_units(
+            darr,
             spc_name,
             species_properties,
             target_units,
@@ -5038,11 +5124,11 @@ def make_benchmark_mass_conservation_table(
         )
 
         # Save total global mass
-        masses.append(np.sum(da.values))
+        masses.append(np.sum(darr.values))
 
         # Clean up
-        del ds
-        del da
+        del dset
+        del darr
         gc.collect()
 
     # Calclate max and min mass, absolute diff, percent diff
@@ -5058,25 +5144,25 @@ def make_benchmark_mass_conservation_table(
     # Create file
     outfilename = os.path.join(dst, "Passive_mass.txt")
 
-    with open(outfilename, 'w') as f:
+    with open(outfilename, "w", encoding="UTF-8") as ofile:
         titlestr = '  Global Mass of Passive Tracer in ' + runstr + '  '
         #headers
-        print('%' * (len(titlestr)+4), file=f)
-        print(titlestr, file=f)
-        print('%' * (len(titlestr)+4), file=f)
-        print('', file=f)
-        print(' Date' + ' ' * 8 + 'Mass [Tg]', file=f)
-        print(' ' + '-' * 10 + '  ' + '-' * 16, file=f)
+        print('%' * (len(titlestr)+4), file=ofile)
+        print(titlestr, file=ofile)
+        print('%' * (len(titlestr)+4), file=ofile)
+        print('', file=ofile)
+        print(' Date' + ' ' * 8 + 'Mass [Tg]', file=ofile)
+        print(' ' + '-' * 10 + '  ' + '-' * 16, file=ofile)
         #masses
-        for i in range(len(masses)):
-            print(f" {dates[i]}  {masses[i] : 11.13f}", file=f)
-        print(' ', file=f)
-        print(' Summary', file=f)
-        print(' ' + '-' * 30, file=f)
-        print(f" Max mass =  {max_mass : 2.13f} Tg", file=f)
-        print(f" Min mass =  {min_mass : 2.13f} Tg", file=f)
-        print(f" Abs diff =  {absdiff : >16.3f} g", file=f)
-        print(f" Pct diff =  {pctdiff : >16.10f} %", file=f)
+        for date, mass in enumerate(masses):
+            print(f" {date}  {mass : 11.13f}", file=ofile)
+        print(' ', file=ofile)
+        print(' Summary', file=ofile)
+        print(' ' + '-' * 30, file=ofile)
+        print(f" Max mass =  {max_mass : 2.13f} Tg", file=ofile)
+        print(f" Min mass =  {min_mass : 2.13f} Tg", file=ofile)
+        print(f" Abs diff =  {absdiff : >16.3f} g", file=ofile)
+        print(f" Pct diff =  {pctdiff : >16.10f} %", file=ofile)
 
     gc.collect()
 
@@ -5100,6 +5186,8 @@ def get_species_database_dir(config):
         Path to the directory in which the species_database.yml file
         is located.
     """
+    gcpy_util.verify_variable_type(config, dict)
+
     spcdb_dir = config["paths"]["spcdb_dir"]
     if "DEFAULT" in spcdb_dir.upper():
         if config["options"]["comparisons"]["gchp_vs_gchp"]["run"]:
@@ -5192,14 +5280,18 @@ def create_benchmark_summary_table(
     # ==================================================================
 
     # Create the directory for output
-    util.make_directory(dst, overwrite)
+    gcpy_util.make_directory(dst, overwrite)
 
     # Create file
     try:
-        f = open(os.path.join(dst, outfilename), "w")
-    except (IOError, OSError, FileNotFoundError) as e:
+        ofile = open(
+            os.path.join(dst, outfilename),
+            "w",
+            encoding="UTF-8"
+        )
+    except (IOError, OSError, FileNotFoundError) as exc:
         msg = f"Could not open {outfilename} for writing!"
-        raise e(msg) from e
+        raise exc(msg) from exc
 
     # Title strings
     title1 = "### Benchmark summary table"
@@ -5207,13 +5299,13 @@ def create_benchmark_summary_table(
     title3 = f"### Dev = {devstr}"
 
     # Print header to file
-    print("#" * 80, file=f)
-    print(f"{title1 : <77}{'###'}", file=f)
-    print(f"{'###'  : <77}{'###'}", file=f)
-    print(f"{title2 : <77}{'###'}", file=f)
-    print(f"{title3 : <77}{'###'}", file=f)
-    print("#" * 80, file=f)
-    print(file=f)
+    print("#" * 80, file=ofile)
+    print(f"{title1 : <77}{'###'}", file=ofile)
+    print(f"{'###'  : <77}{'###'}", file=ofile)
+    print(f"{title2 : <77}{'###'}", file=ofile)
+    print(f"{title3 : <77}{'###'}", file=ofile)
+    print("#" * 80, file=ofile)
+    print(file=ofile)
 
     # ==================================================================
     # Read data and look differences btw Ref & Dev versions
@@ -5224,7 +5316,7 @@ def create_benchmark_summary_table(
     skip_vars.append("AREA")
 
     # Pick the proper function to read the data
-    reader = util.dataset_reader(
+    reader = gcpy_util.dataset_reader(
         multi_files=False,
         verbose=verbose
     )
@@ -5234,7 +5326,7 @@ def create_benchmark_summary_table(
 
         # Read Ref data
         refdata = reader(
-            util.get_filepath(
+            bmk_util.get_filepath(
                 refpath,
                 col,
                 refdate,
@@ -5245,7 +5337,7 @@ def create_benchmark_summary_table(
 
         # Get Dev data
         devdata = reader(
-            util.get_filepath(
+            bmk_util.get_filepath(
                 devpath,
                 col,
                 devdate,
@@ -5257,13 +5349,13 @@ def create_benchmark_summary_table(
         # Make sure that Ref and Dev datasets have the same variables.
         # Variables that are in Ref but not in Dev will be added to Dev
         # with all missing values (NaNs). And vice-versa.
-        [refdata, devdata] = util.add_missing_variables(
+        [refdata, devdata] = bmk_util.add_missing_variables(
             refdata,
             devdata
         )
 
         # Find all common variables between the two datasets
-        vardict = util.compare_varnames(
+        vardict = bmk_util.compare_varnames(
             refdata,
             devdata,
             quiet=True
@@ -5275,147 +5367,34 @@ def create_benchmark_summary_table(
         # Keep track of which variables are different
         # NOTE: Use 32-point float for comparisons since this is
         # the precision used for History diagnostics.
-        for v in vardict["commonvarsData"]:
-            if not util.array_equals(
-                    refdata[v],
-                    devdata[v],
+        for var in vardict["commonvarsData"]:
+            if not gcpy_util.array_equals(
+                    refdata[var],
+                    devdata[var],
                     dtype=np.float32
             ):
-                diff_list.append(v)
+                diff_list.append(var)
 
         # Drop duplicate values from diff_list
-        diff_list = util.unique_values(diff_list, drop=[None])
+        diff_list = gcpy_util.unique_values(diff_list, drop=[None])
 
         if len(diff_list) == 0:
-            print("-" *  79, file=f)
-            print(f"{col}: {devstr} is identical to {refstr}", file=f)
-            print(file=f)
+            print("-" *  79, file=ofile)
+            print(f"{col}: {devstr} is identical to {refstr}", file=ofile)
+            print(file=ofile)
         else:
-            print("-" *  79, file=f)
-            print(f"{col}: {devstr} differs from {refstr}", file=f)
-            print("\n  Diagnostics that differ", file=f)
-            for i, v in enumerate(diff_list):
-                print(f"    {v}", file=f)
+            print("-" *  79, file=ofile)
+            print(f"{col}: {devstr} differs from {refstr}", file=ofile)
+            print("\n  Diagnostics that differ", file=ofile)
+            for i, var in enumerate(diff_list):
+                print(f"    {var}", file=ofile)
                 if i > 10:
-                    print(f"    ... and {len(diff_list) - 10} others", file=f)
+                    print(f"    ... and {len(diff_list) - 10} others",
+                          file=ofile)
                     break
-            print(file=f)
+            print(file=ofile)
 
     # ==================================================================
     # Close files
     # ==================================================================
-    f.close()
-
-
-def diff_list_to_text(
-        refstr,
-        devstr,
-        diff_list,
-        fancy_format=False
-):
-    """
-    Converts a list of species/emissions/inventories/diagnostics that
-    show differences between GEOS-Chem versions ot a printable text
-    string.
-
-    Args:
-    -----
-    diff_list : list
-        List to be converted into text.  "None" values will be dropped.
-    fancy_format: bool
-        Set to True if you wish output text to be bookended with '###'.
-
-    Returns:
-    diff_text : str
-        String with concatenated list values.
-    """
-    if not isinstance(diff_list, list):
-        raise ValueError("Argument 'diff_list' must be a list!")
-
-    # Use "Dev" and "Ref" for inserting into a header
-    if fancy_format:
-        refstr = "Ref"
-        devstr = "Dev"
-
-    # Strip out duplicates from diff_list
-    # Prepare a message about species differences (or alternate msg)
-    diff_list = util.unique_values(diff_list, drop=[None])
-
-    # Print the text
-    n_diff = len(diff_list)
-    if n_diff > 0:
-        diff_text = f"{devstr} and {refstr} show {n_diff} differences"
-    else:
-        diff_text = f"{devstr} and {refstr} are identical"
-
-    # If we are placing the text in a header,
-    # then trim the length of diff_text to fit.
-    if fancy_format:
-        diff_text = util.wrap_text(
-            diff_text,
-            width=83
-        )
-        diff_text = f"### {diff_text : <82}{'###'}"
-
-    return diff_text.strip()
-
-
-def diff_of_diffs_toprow_title(config, model):
-    """
-    Creates the diff-of-diffs plot title for the top row of the
-    six-plot output.  If the title string is too long (as empirically
-    determined), then a newline will be inserted in order to prevent
-    the title strings from overlapping.
-
-    Args:
-    -----
-    config : dict
-       Dictionary containing the benchmark options (as read from a
-       YAML file such as 1mo_benchmark.yml, etc.)
-    model: str
-       The model to plot.  Accepted values are "gcc" or "gchp".
-
-    Returns:
-    --------
-    title: str
-        The plot title string for the diff-of-diff
-    """
-    if not isinstance(config, dict):
-        msg = "The 'config' argument must be of type 'dict`!"
-        raise ValueError(msg)
-    if not isinstance(model, str):
-        msg = "The 'model' argument must be of type 'str'!"
-        raise ValueError(msg)
-    if not "gcc" in model and not "gchp" in model:
-        msg = "The 'model' argument must be either 'gcc' or 'gchp'!"
-        raise ValueError(msg)
-
-    title = (
-        config["data"]["dev"][model]["version"]
-        + " - "
-        + config["data"]["ref"][model]["version"]
-    )
-
-    if len(title) > 40:
-        title = (
-            config["data"]["dev"][model]["version"]
-            + " -\n"
-            + config["data"]["ref"][model]["version"]
-        )
-
-    return title
-
-
-def get_benchmark_config_dir():
-    """
-    Returns the absolute path to the gcpy/benchmark/config folder.
-    """
-    return os_path.abspath(
-        os.path.dirname(
-            os.path.join(
-                __file__,
-                "..",
-                "config"
-            )
-        )
-    )
+    ofile.close()

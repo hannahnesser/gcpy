@@ -28,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Added `options:n_cores` to all benchmark YAML config files
 - Added `benchmark/__init__.py` and `benchmark/modules/__init__.py` files.
 - Added new module `gcpy/benchmark/modules/benchmark_util.py`
+- Added new module `gcpy/benchmark/modules/benchmark_config_files.py`
 
 ### Changed
 - Simplified the Github issues templates into two options: `new-feature-or-discussion.md` and `question-issue.md`
