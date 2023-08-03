@@ -1,16 +1,19 @@
 """
-Internal utilities for helping to manage xarray and numpy
-objects used throughout GCPy
+General utility routines. Contains many useful functions for
+helping to manage xarray and numpy objects used in GCPy.
 """
 
 import os
 import warnings
-import shutil
 from textwrap import wrap
 from yaml import safe_load as yaml_safe_load
 import numpy as np
 import xarray as xr
 from PyPDF2 import PdfFileWriter, PdfFileReader
+
+# ======================================================================
+# %%%%% METHODS %%%%%
+# ======================================================================
 
 def convert_lon(
         data,
@@ -52,7 +55,8 @@ def convert_lon(
     offset = 0 if neg_dateline else 1
 
     if format not in ['atlantic', 'pacific']:
-        msg = f"Cannot convert longitudes for format '{format}'; please choose one of 'atlantic' or 'pacific'"
+        msg = f"Cannot convert longitudes for format '{format}'; "
+        msg += "please choose one of 'atlantic' or 'pacific'"
         raise ValueError(msg)
 
     # Create a mask to decide how to mutate the longitude values
@@ -77,335 +81,6 @@ def convert_lon(
     data_copy = data_copy.roll(**{dim: roll_len})
 
     return data_copy
-
-
-def get_emissions_varnames(
-        commonvars,
-        template=None
-):
-    """
-    Will return a list of emissions diagnostic variable names that
-    contain a particular search string.
-
-    Args:
-        commonvars: list of strs
-            A list of commmon variable names from two data sets.
-            (This can be obtained with method gcpy.util.compare_varnames)
-        template: str
-            String template for matching variable names corresponding
-            to emission diagnostics by sector
-            Default Value: None
-    Returns:
-        varnames: list of strs
-            A list of variable names corresponding to emission
-            diagnostics for a given species and sector
-    """
-
-    # Make sure the commonvars list has at least one element
-    if len(commonvars) == 0:
-        raise ValueError("No valid variable names were passed!")
-
-    # Define template for emission diagnostics by sector
-    if template is None:
-        raise ValueError("The template argument was not passed!")
-
-    # Find all emission diagnostics for the given species
-    varnames = filter_names(commonvars, template)
-
-    return varnames
-
-
-def create_display_name(
-        diagnostic_name
-):
-    """
-    Converts a diagnostic name to a more easily digestible name
-    that can be used as a plot title or in a table of totals.
-
-    Args:
-        diagnostic_name: str
-            Name of the diagnostic to be formatted
-
-    Returns:
-        display_name: str
-            Formatted name that can be used as plot titles or in tables
-            of emissions totals.
-
-    Remarks:
-        Assumes that diagnostic names will start with either "Emis"
-        (for emissions by category) or "Inv" (for emissions by inventory).
-        This should be an OK assumption to make since this routine is
-        specifically geared towards model benchmarking.
-    """
-
-    # Initialize
-    display_name = diagnostic_name
-
-    # For restart files, just split at the first underscore and return
-    # the text followiong the underscore.  This will preserve certain
-    # species names, such as the TransportTracers species CO_25, etc.
-    if "SpeciesRst" in display_name:
-        return display_name.split("_", 1)[1]
-
-    # Special handling for Inventory totals
-    if "INV" in display_name.upper():
-        display_name = display_name.replace("_", " ")
-
-    # Replace text
-    for v in ["Emis", "EMIS", "emis", "Inv", "INV", "inv"]:
-        display_name = display_name.replace(v, "")
-
-    # Replace only the first underscore with a space
-    display_name = display_name.replace("_", " ", 1)
-
-    return display_name
-
-
-def format_number_for_table(
-        number,
-        max_thresh=1.0e8,
-        min_thresh=1.0e-6,
-        f_fmt="18.6f",
-        e_fmt="18.8e"
-):
-    """
-    Returns a format string for use in the "print_totals" routine.
-    If the number is greater than a maximum threshold or smaller
-    than a minimum threshold, then use scientific notation format.
-    Otherwise use floating-piont format.
-
-    Special case: do not convert 0.0 to exponential notation.
-
-    Args:
-    -----
-    number : float
-        Number to be printed
-
-    max_thresh, min_thresh: float
-        If |number| > max_thresh, use scientific notation.
-        If |number| < min_thresh, use scientific notation
-
-    f_fmt, e_fmt : str
-        The default floating point string and default scientific
-        notation string.
-        Default values: 18.6f, 18.6e
-
-    Returns:
-    --------
-    fmt_str : str
-        Formatted string that can be inserted into the print
-        statement in print_totals.
-    """
-    abs_number = np.abs(number)
-
-    if not (abs_number > 1e-60):
-        return f"{number:{f_fmt}}"
-
-    if abs_number > max_thresh or abs_number < min_thresh:
-        return f"{number:{e_fmt}}"
-    return f"{number:{f_fmt}}"
-
-
-def print_totals(
-        ref,
-        dev,
-        f,
-        diff_list,
-        masks=None,
-):
-    """
-    Computes and prints Ref and Dev totals (as well as the difference
-    Dev - Ref) for two xarray DataArray objects.
-
-    Args:
-        ref: xarray DataArray
-            The first DataArray to be compared (aka "Reference")
-        dev: xarray DataArray
-            The second DataArray to be compared (aka "Development")
-        f: file
-            File object denoting a text file where output will be directed.
-
-    Keyword Args (optional):
-        masks: dict of xarray DataArray
-            Dictionary containing the tropospheric mask arrays
-            for Ref and Dev.  If this keyword argument is passed,
-            then print_totals will print tropospheric totals.
-            Default value: None (i.e. print whole-atmosphere totals)
-
-    Remarks:
-        This is an internal method.  It is meant to be called from method
-        create_total_emissions_table or create_global_mass_table instead of
-        being called directly.
-    """
-
-    # ==================================================================
-    # Initialization and error checks
-    # ==================================================================
-
-    # Make sure that both Ref and Dev are xarray DataArray objects
-    if not isinstance(ref, xr.DataArray):
-        raise TypeError("The 'ref' argument must be an xarray DataArray!")
-    if not isinstance(dev, xr.DataArray):
-        raise TypeError("The 'dev' argument must be an xarray DataArray!")
-    if not isinstance(diff_list, list):
-        raise TypeError("The 'diff_list' argument must be a list!")
-
-    # Determine if either Ref or Dev have all NaN values:
-    ref_is_all_nan = np.isnan(ref.values).all()
-    dev_is_all_nan = np.isnan(dev.values).all()
-
-    # If Ref and Dev do not contain all NaNs, then make sure
-    # that Ref and Dev have the same units before proceeding.
-    if (not ref_is_all_nan) and (not dev_is_all_nan):
-        if ref.units != dev.units:
-            msg = f"Ref has units {ref.units}, but Dev has units {dev.units}!"
-            raise ValueError(msg)
-
-    # ==================================================================
-    # Get the diagnostic name and units
-    # ==================================================================
-    diagnostic_name = dev.name
-    if dev_is_all_nan:
-        diagnostic_name = ref.name
-
-    # Create the display name for the table
-    display_name = create_display_name(diagnostic_name)
-
-    # Get the species name from the display name
-    species_name = display_name
-    c = species_name.find(" ")
-    if c > 0:
-        species_name = display_name[0:c]
-
-    # Special handling for totals
-    if "_TOTAL" in diagnostic_name.upper():
-        print("-"*90, file=f)
-
-    # ==================================================================
-    # Sum the Ref array (or set to NaN if missing)
-    # ==================================================================
-    refarr = ref.values
-    if ref_is_all_nan:
-        total_ref = np.nan
-    else:
-        if masks is not None:
-            refarr = np.ma.masked_array(refarr, masks["Ref_TropMask"])
-        total_ref = np.sum(refarr, dtype=np.float64)
-
-    # ==================================================================
-    # Sum the Dev array (or set to NaN if missing)
-    # ==================================================================
-    devarr = dev.values
-    if dev_is_all_nan:
-        total_dev = np.nan
-    else:
-        if masks is not None:
-            devarr = np.ma.masked_array(devarr, masks["Dev_TropMask"])
-        total_dev = np.sum(devarr, dtype=np.float64)
-
-    # ==================================================================
-    # Compute differences (or set to NaN if missing)
-    # ==================================================================
-    if ref_is_all_nan or dev_is_all_nan:
-        diff = np.nan
-    else:
-        diff = total_dev - total_ref
-    has_diffs = abs(diff) > np.float64(0.0)
-
-    # Append to the list of differences.  If no differences then append
-    # None.  Duplicates can be stripped out in the calling routine.
-    if has_diffs:
-        diff_str = " * "
-        diff_list.append(species_name)
-    else:
-        diff_str = ""
-        diff_list.append(None)
-
-    # ==================================================================
-    # Compute % differences (or set to NaN if missing)
-    # If ref is very small, near zero, also set the % diff to NaN
-    # ==================================================================
-    if np.isnan(total_ref) or np.isnan(total_dev):
-        pctdiff = np.nan
-    else:
-        pctdiff = ((total_dev - total_ref) / total_ref) * 100.0
-        if np.abs(total_ref) < 1.0e-15:
-            pctdiff = np.nan
-
-    # ==================================================================
-    # Write output to file and return
-    # ==================================================================
-    ref_fmt = format_number_for_table(total_ref)
-    dev_fmt = format_number_for_table(total_dev)
-    diff_fmt = format_number_for_table(
-        diff,
-        max_thresh=1.0e4,
-        min_thresh=1.0e-4,
-        f_fmt="12.3f",
-        e_fmt="12.4e"
-    )
-    pctdiff_fmt = format_number_for_table(
-        pctdiff,
-        max_thresh=1.0e3,
-        min_thresh=1.0e-3,
-        f_fmt="8.3f",
-        e_fmt="8.1e"
-    )
-
-    print(f"{display_name[0:19].ljust(19)}: {ref_fmt}  {dev_fmt}  {diff_fmt}  {pctdiff_fmt}  {diff_str}", file=f)
-
-    return diff_list
-
-
-def get_species_categories(
-        benchmark_type="FullChemBenchmark"
-):
-    """
-    Returns the list of benchmark categories that each species
-    belongs to.  This determines which PDF files will contain the
-    plots for the various species.
-
-    Args:
-        benchmark_type: str
-            Specifies the type of the benchmark (either
-            FullChemBenchmark (default) or TransportTracersBenchmark).
-
-    Returns:
-        spc_cat_dict: dict
-            A nested dictionary of categories (and sub-categories)
-            and the species belonging to each.
-
-    NOTE: The benchmark categories are specified in YAML file
-    benchmark_species.yml.
-    """
-    spc_cat_dict = read_config_file(
-        os.path.join(
-            os.path.dirname(__file__),
-            "benchmark_categories.yml"
-        )
-    )
-    return spc_cat_dict[benchmark_type]
-
-
-def archive_species_categories(
-        dst
-):
-    """
-    Writes the list of benchmark categories to a YAML file
-    named "benchmark_species.yml".
-
-    Args:
-        dst: str
-            Name of the folder where the YAML file containing
-            benchmark categories ("benchmark_species.yml")
-            will be written.
-    """
-    spc_categories = "benchmark_categories.yml"
-    src = os.path.join(os.path.dirname(__file__), spc_categories)
-    copy = os.path.join(dst, spc_categories)
-    if not os.path.exists(copy):
-        print(f"\nArchiving {spc_categories} in {dst}")
-        shutil.copyfile(src, copy)
 
 
 def add_bookmarks_to_pdf(
@@ -555,109 +230,15 @@ def add_nested_bookmarks_to_pdf(
     pdfobj.close()
 
 
-def add_missing_variables(
-        refdata,
-        devdata,
-        verbose=False,
-        **kwargs
-):
-    """
-    Compares two xarray Datasets, "Ref", and "Dev".  For each variable
-    that is present  in "Ref" but not in "Dev", a DataArray of missing
-    values (i.e. NaN) will be added to "Dev".  Similarly, for each
-    variable that is present in "Dev" but not in "Ref", a DataArray
-    of missing values will be added to "Ref".
-    This routine is mostly intended for benchmark purposes, so that we
-    can represent variables that were removed from a new GEOS-Chem
-    version by missing values in the benchmark plots.
-    NOTE: This function assuming incoming datasets have the same sizes and
-    dimensions, which is not true if comparing datasets with different grid
-    resolutions or types.
-
-    Args:
-        refdata: xarray Dataset
-            The "Reference" (aka "Ref") dataset
-        devdata: xarray Dataset
-            The "Development" (aka "Dev") dataset
-
-    Keyword Args (optional):
-        verbose: bool
-            Toggles extra debug print output
-            Default value: False
-
-    Returns:
-        refdata, devdata: xarray Datasets
-            The returned "Ref" and "Dev" datasets, with
-            placeholder missing value variables added
-    """
-    # ==================================================================
-    # Initialize
-    # ==================================================================
-
-    # Make sure that refdata and devdata are both xarray Dataset objects
-    if not isinstance(refdata, xr.Dataset):
-        raise TypeError("The refdata object must be an xarray Dataset!")
-    if not isinstance(devdata, xr.Dataset):
-        raise TypeError("The refdata object must be an xarray Dataset!")
-
-    # Find common variables as well as variables only in one or the other
-    vardict = compare_varnames(refdata, devdata, quiet=True)
-    refonly = vardict["refonly"]
-    devonly = vardict["devonly"]
-    # Don't clobber any DataArray attributes
-    with xr.set_options(keep_attrs=True):
-
-        # ==============================================================
-        # For each variable that is in refdata but not in devdata,
-        # add a new DataArray to devdata with the same sizes but
-        # containing all NaN's.  This will allow us to represent those
-        # variables as missing values # when we plot against refdata.
-        # ==============================================================
-        devlist = [devdata]
-        for v in refonly:
-            if verbose:
-                print(f"Creating array of NaN in devdata for: {v}")
-            dr = create_blank_dataarray(
-                name=refdata[v].name,
-                sizes=devdata.sizes,
-                coords=devdata.coords,
-                attrs=refdata[v].attrs,
-                **kwargs
-            )
-            devlist.append(dr)
-        devdata = xr.merge(devlist)
-
-        # ==============================================================
-        # For each variable that is in devdata but not in refdata,
-        # add a new DataArray to refdata with the same sizes but
-        # containing all NaN's.  This will allow us to represent those
-        # variables as missing values # when we plot against devdata.
-        # ==================================================================
-        reflist = [refdata]
-        for v in devonly:
-            if verbose:
-                print(f"Creating array of NaN in refdata for: {v}")
-            dr = create_blank_dataarray(
-                name=devdata[v].name,
-                sizes=refdata.sizes,
-                coords=refdata.coords,
-                attrs=devdata[v].attrs,
-                **kwargs
-            )
-            reflist.append(dr)
-        refdata = xr.merge(reflist)
-
-    return refdata, devdata
-
-
 def reshape_MAPL_CS(
-        da,
+        darr,
         multi_index_lat=True
 ):
     """
     Reshapes data if contains dimensions indicate MAPL v1.0.0+ output
+
     Args:
-        da: xarray DataArray
+        darr: xarray DataArray
             Data array variable
 
     Keyword Args (Optional):
@@ -668,7 +249,7 @@ def reshape_MAPL_CS(
             Default value: True
 
     Returns:
-        data: xarray DataArray
+        darr: xarray DataArray
             Data with dimensions renamed and transposed to match old MAPL format
     """
     # Suppress annoying future warnings for now
@@ -676,109 +257,36 @@ def reshape_MAPL_CS(
 
     # Only do the following for DataArray objects
     # (otherwise just fall through and return the original argument as-is)
-    if isinstance(da, xr.DataArray):
+    if isinstance(darr, xr.DataArray):
         with xr.set_options(keep_attrs=True):
-            if "nf" in da.dims and "Xdim" in da.dims and "Ydim" in da.dims:
-                da = da.stack(lat=("nf", "Ydim"))
-                da = da.rename({"Xdim": "lon"})
-                # NOTE: The da.stack operation will return the da.lat
+            if "nf" in darr.dims and "Xdim" in darr.dims and "Ydim" in darr.dims:
+                darr = darr.stack(lat=("nf", "Ydim"))
+                darr = darr.rename({"Xdim": "lon"})
+                # NOTE: The darr.stack operation will return the darr.lat
                 # dimension as a MultiIndex.  In other words, each
-                # element of da.lat is a tuple (face number, latitude
+                # element of darr.lat is a tuple (face number, latitude
                 # in degrees).  To disable this behavior, set keyword
                 # argument multi_index_lat=False.  This will return
-                # da.lat as an array of latitude values, which is
+                # darr.lat as an array of latitude values, which is
                 # needed for backwards compatibility.
                 #  -- Bob Yantosca (07 Jul 2023)
                 if not multi_index_lat:
-                    da = da.assign_coords(
-                        {"lat": [list(tpl)[1] for tpl in da.lat.values]}
+                    darr = darr.assign_coords(
+                        {"lat": [list(tpl)[1] for tpl in darr.lat.values]}
                     )
-            if "lev" in da.dims and "time" in da.dims:
-                da = da.transpose("time", "lev", "lat", "lon")
-            elif "lev" in da.dims:
-                da = da.transpose("lev", "lat", "lon")
-            elif "time" in da.dims:
-                da = da.transpose("time", "lat", "lon")
+            if "lev" in darr.dims and "time" in darr.dims:
+                darr = darr.transpose("time", "lev", "lat", "lon")
+            elif "lev" in darr.dims:
+                darr = darr.transpose("lev", "lat", "lon")
+            elif "time" in darr.dims:
+                darr = darr.transpose("time", "lat", "lon")
             else:
-                da = da.transpose("lat", "lon")
-    return da
-
-
-def get_diff_of_diffs(
-        ref,
-        dev
-):
-    """
-    Generate datasets containing differences between two datasets
-
-    Args:
-        ref: xarray Dataset
-            The "Reference" (aka "Ref") dataset.
-        dev: xarray Dataset
-            The "Development" (aka "Dev") dataset
-
-    Returns:
-         absdiffs: xarray Dataset
-            Dataset containing dev-ref values
-         fracdiffs: xarray Dataset
-            Dataset containing dev/ref values
-    """
-
-    # get diff of diffs datasets for 2 datasets
-    # limit each pair to be the same type of output (GEOS-Chem Classic or GCHP)
-    # and same resolution / extent
-    vardict = compare_varnames(ref, dev, quiet=True)
-    varlist = vardict["commonvars"]
-    # Select only common fields between the Ref and Dev datasets
-    ref = ref[varlist]
-    dev = dev[varlist]
-    if 'nf' not in ref.dims and 'nf' not in dev.dims:
-        # if the coords do not align then set time dimensions equal
-        try:
-            xr.align(dev, ref, join='exact')
-        except:
-            ref.coords["time"] = dev.coords["time"]
-        with xr.set_options(keep_attrs=True):
-            absdiffs = dev - ref
-            fracdiffs = dev / ref
-            for v in dev.data_vars.keys():
-                # Ensure the diffs Dataset includes attributes
-                absdiffs[v].attrs = dev[v].attrs
-                fracdiffs[v].attrs = dev[v].attrs
-    elif 'nf' in ref.dims and 'nf' in dev.dims:
-
-        # Include special handling if cubed sphere grid dimension names are different
-        # since they changed in MAPL v1.0.0.
-        if "lat" in ref.dims and "Xdim" in dev.dims:
-            ref_newdimnames = dev.copy()
-            for v in dev.data_vars.keys():
-                if "Xdim" in dev[v].dims:
-                    ref_newdimnames[v].values = ref[v].values.reshape(
-                        dev[v].values.shape)
-                # NOTE: the reverse conversion is gchp_dev[v].stack(lat=("nf","Ydim")).transpose(
-                # "time","lev","lat","Xdim").values
-
-        with xr.set_options(keep_attrs=True):
-            absdiffs = dev.copy()
-            fracdiffs = dev.copy()
-            for v in dev.data_vars.keys():
-                if "Xdim" in dev[v].dims or "lat" in dev[v].dims:
-                    absdiffs[v].values = dev[v].values - ref[v].values
-                    fracdiffs[v].values = dev[v].values / ref[v].values
-                    # NOTE: The diffs Datasets are created without variable
-                    # attributes; we have to reattach them
-                    absdiffs[v].attrs = dev[v].attrs
-                    fracdiffs[v].attrs = dev[v].attrs
-    else:
-        print('Diff-of-diffs plot supports only identical grid types (lat/lon or cubed-sphere)' + \
-              ' within each dataset pair')
-        raise ValueError
-
-    return absdiffs, fracdiffs
+                darr = darr.transpose("lat", "lon")
+    return darr
 
 
 def slice_by_lev_and_time(
-        ds,
+        dset,
         varname,
         itime,
         ilev,
@@ -788,7 +296,7 @@ def slice_by_lev_and_time(
     Given a Dataset, returns a DataArray sliced by desired time and level.
 
     Args:
-        ds: xarray Dataset
+        dset: xarray Dataset
             Dataset containing GEOS-Chem data.
         varname: str
             Variable name for data variable to be sliced
@@ -800,69 +308,68 @@ def slice_by_lev_and_time(
             Whether to flip ilev to be indexed from ground or top of atmosphere
 
     Returns:
-        dr: xarray DataArray
+        darr: xarray DataArray
             DataArray of data variable sliced according to ilev and itime
     """
+    verify_variable_type(dset, xr.Dataset)
+
     # used in compare_single_level and compare_zonal_mean to get dataset slices
-    if not isinstance(ds, xr.Dataset):
-        msg="ds is not of type xarray.Dataset!"
-        raise TypeError(msg)
-    if not varname in ds.data_vars.keys():
-        msg="Could not find 'varname' in ds!"
+    if not varname in dset.data_vars.keys():
+        msg="Could not find 'varname' in dset!"
         raise ValueError(msg)
 
     # NOTE: isel no longer seems to work on a Dataset, so
     # first createthe DataArray object, then use isel on it.
     #  -- Bob Yantosca (19 Jan 2023)
-    dr = ds[varname]
-    vdims = dr.dims
-    if ("time" in vdims and dr.time.size > 0) and "lev" in vdims:
+    darr = dset[varname]
+    vdims = darr.dims
+    if ("time" in vdims and darr.time.size > 0) and "lev" in vdims:
         if flip:
-            fliplev=len(dr['lev']) - 1 - ilev
-            return dr.isel(time=itime, lev=fliplev)
-        return dr.isel(time=itime, lev=ilev)
+            fliplev=len(darr['lev']) - 1 - ilev
+            return darr.isel(time=itime, lev=fliplev)
+        return darr.isel(time=itime, lev=ilev)
     if ("time" not in vdims or itime == -1) and "lev" in vdims:
         if flip:
-            fliplev= len(dr['lev']) - 1 - ilev
-            return dr.isel(lev=fliplev)
-        return dr.isel(lev=ilev)
-    if ("time" in vdims and dr.time.size > 0 and itime != -1) and \
+            fliplev= len(darr['lev']) - 1 - ilev
+            return darr.isel(lev=fliplev)
+        return darr.isel(lev=ilev)
+    if ("time" in vdims and darr.time.size > 0 and itime != -1) and \
        "lev" not in vdims:
-        return dr.isel(time=itime)
-    return dr
+        return darr.isel(time=itime)
+    return darr
 
 
 def rename_and_flip_gchp_rst_vars(
-        ds
+        dset
 ):
     '''
     Transforms a GCHP restart dataset to match GCC names and level convention
 
     Args:
-        ds: xarray Dataset
+        dset: xarray Dataset
             Dataset containing GCHP restart file data, such as variables
             SPC_{species}, BXHEIGHT, DELP_DRY, and TropLev, with level
             convention down (level 0 is top-of-atmosphere).
 
     Returns:
-        ds: xarray Dataset
+        dset: xarray Dataset
             Dataset containing GCHP restart file data with names and level
             convention matching GCC restart. Variables include
             SpeciesRst_{species}, Met_BXHEIGHT, Met_DELPDRY, and Met_TropLev,
             with level convention up (level 0 is surface).
     '''
-    for v in ds.data_vars.keys():
-        if v.startswith('SPC_'):
-            spc = v.replace('SPC_', '')
-            ds = ds.rename({v: 'SpeciesRst_' + spc})
-        elif v == 'DELP_DRY':
-            ds = ds.rename({"DELP_DRY": "Met_DELPDRY"})
-        elif v == 'BXHEIGHT':
-            ds = ds.rename({"BXHEIGHT": "Met_BXHEIGHT"})
-        elif v == 'TropLev':
-            ds = ds.rename({"TropLev": "Met_TropLev"})
-    ds = ds.sortby('lev', ascending=False)
-    return ds
+    for var in dset.data_vars.keys():
+        if var.startswith('SPC_'):
+            spc = var.replace('SPC_', '')
+            dset = dset.rename({var: 'SpeciesRst_' + spc})
+        elif var == 'DELP_DRY':
+            dset = dset.rename({"DELP_DRY": "Met_DELPDRY"})
+        elif var == 'BXHEIGHT':
+            dset = dset.rename({"BXHEIGHT": "Met_BXHEIGHT"})
+        elif var == 'TropLev':
+            dset = dset.rename({"TropLev": "Met_TropLev"})
+    dset = dset.sortby('lev', ascending=False)
+    return dset
 
 
 def dict_diff(
@@ -888,126 +395,13 @@ def dict_diff(
     return result
 
 
-def compare_varnames(
+def compare_stats(
         refdata,
+        refstr,
         devdata,
-        refonly=None,
-        devonly=None,
-        quiet=False):
-    """
-    Finds variables that are common to two xarray Dataset objects.
-
-    Args:
-        refdata: xarray Dataset
-            The first Dataset to be compared.
-            (This is often referred to as the "Reference" Dataset.)
-        devdata: xarray Dataset
-            The second Dataset to be compared.
-            (This is often referred to as the "Development" Dataset.)
-
-    Keyword Args (optional):
-        quiet: bool
-            Set this flag to True if you wish to suppress printing
-            informational output to stdout.
-            Default value: False
-
-    Returns:
-        vardict: dict of lists of str
-            Dictionary containing several lists of variable names:
-            Key              Value
-            -----            -----
-            commonvars       List of variables that are common to
-                             both refdata and devdata
-            commonvarsOther  List of variables that are common
-                             to both refdata and devdata, but do
-                             not have lat, lon, and/or level
-                             dimensions (e.g. index variables).
-            commonvars2D     List of variables that are common to
-                             common to refdata and devdata, and that
-                             have lat and lon dimensions, but not level.
-            commonvars3D     List of variables that are common to
-                             refdata and devdata, and that have lat,
-                             lon, and level dimensions.
-            commonvarsData   List of all commmon 2D or 3D data variables,
-                             excluding index variables.  This is the
-                             list of "plottable" variables.
-            refonly          List of 2D or 3D variables that are only
-                             present in refdata.
-            devonly          List of 2D or 3D variables that are only
-                             present in devdata
-    """
-    refvars = [k for k in refdata.data_vars.keys()]
-    devvars = [k for k in devdata.data_vars.keys()]
-    commonvars = sorted(list(set(refvars).intersection(set(devvars))))
-    refonly = [v for v in refvars if v not in devvars]
-    devonly = [v for v in devvars if v not in refvars]
-    dimmismatch = [v for v in commonvars if refdata[v].ndim != devdata[v].ndim]
-    # Assume plottable data has lon and lat
-    # This is OK for purposes of benchmarking
-    #  -- Bob Yantosca (09 Feb 2023)
-    commonvarsData = [
-        v for v in commonvars if (
-            ("lat" in refdata[v].dims or "Ydim" in refdata[v].dims)
-            and
-            ("lon" in refdata[v].dims or "Xdim" in refdata[v].dims)
-        )
-    ]
-    commonvarsOther = [
-        v for v in commonvars if (
-           v not in commonvarsData
-        )
-    ]
-    commonvars2D = [
-        v for v in commonvars if (
-            (v in commonvarsData) and ("lev" not in refdata[v].dims)
-        )
-    ]
-    commonvars3D = [
-        v for v in commonvars if (
-            (v in commonvarsData) and ("lev" in refdata[v].dims)
-        )
-    ]
-
-    # Print information on common and mismatching variables,
-    # as well as dimensions
-    if not quiet:
-        print("\nComparing variable names in compare_varnames")
-        print(f"{len(commonvars)} common variables")
-        if len(refonly) > 0:
-            print(f"{len(refonly)} variables in ref only (skip)")
-            print(f"   Variable names: {refonly}")
-        else:
-            print("0 variables in ref only")
-            if len(devonly) > 0:
-                print(f"len({devonly} variables in dev only (skip)")
-                print(f"   Variable names: {devonly}")
-            else:
-                print("0 variables in dev only")
-                if len(dimmismatch) > 0:
-                    print(f"{dimmismatch} common variables have different dimensions")
-                    print(f"   Variable names: {dimmismatch}")
-                else:
-                    print("All variables have same dimensions in ref and dev")
-
-    # For safety's sake, remove the 0-D and 1-D variables from
-    # commonvarsData, refonly, and devonly.  This will ensure that
-    # these lists will only contain variables that can be plotted.
-    commonvarsData = [v for v in commonvars if v not in commonvarsOther]
-    refonly = [v for v in refonly if v not in commonvarsOther]
-    devonly = [v for v in devonly if v not in commonvarsOther]
-
-    return {
-        "commonvars": commonvars,
-        "commonvars2D": commonvars2D,
-        "commonvars3D": commonvars3D,
-        "commonvarsData": commonvarsData,
-        "commonvarsOther": commonvarsOther,
-        "refonly": refonly,
-        "devonly": devonly
-    }
-
-
-def compare_stats(refdata, refstr, devdata, devstr, varname):
+        devstr,
+        varname
+):
     """
     Prints out global statistics (array sizes, mean, min, max, sum)
     from two xarray Dataset objects.
@@ -1052,7 +446,7 @@ def compare_stats(refdata, refstr, devdata, devstr, varname):
 
 
 def convert_bpch_names_to_netcdf_names(
-        ds,
+        dset,
         verbose=False
 ):
     """
@@ -1060,7 +454,7 @@ def convert_bpch_names_to_netcdf_names(
     to names used in the GEOS-Chem netCDF diagnostic outputs.
 
     Args:
-        ds: xarray Dataset
+        dset: xarray Dataset
             The xarray Dataset object whose names are to be replaced.
 
     Keyword Args (optional):
@@ -1069,7 +463,7 @@ def convert_bpch_names_to_netcdf_names(
             Default value: False
 
     Returns:
-        ds_new: xarray Dataset
+        dset_new: xarray Dataset
             A new xarray Dataset object all of the bpch-style
             diagnostic names replaced by GEOS-Chem netCDF names.
 
@@ -1127,7 +521,7 @@ def convert_bpch_names_to_netcdf_names(
     old_to_new = {}
 
     # Loop over all variable names in the data set
-    for variable_name in ds.data_vars.keys():
+    for variable_name in dset.data_vars.keys():
 
         # Save the original variable name, since this is the name
         # that we actually need to replace in the dataset.
@@ -1249,176 +643,10 @@ def convert_bpch_names_to_netcdf_names(
     if verbose:
         print("\nRenaming variables in the data...")
     with xr.set_options(keep_attrs=True):
-        ds = ds.rename(name_dict=old_to_new)
+        dset = dset.rename(name_dict=old_to_new)
 
     # Return the dataset
-    return ds
-
-
-def get_lumped_species_definitions():
-    """
-    Returns lumped species definitions from a YAML file.
-
-    Returns:
-        lumped_spc_dict : dict of str
-            Dictionary of lumped species
-    """
-    return read_config_file(
-        os.path.join(
-            os.path.dirname(__file__),
-            "lumped_species.yml"
-        ),
-        quiet=True
-    )
-
-
-def archive_lumped_species_definitions(
-        dst
-):
-    """
-    Archives lumped species definitions to a YAML file.
-
-    Args:
-        dst : str
-            Name of the folder where the YAML file containing
-            benchmark categories ("benchmark_species.yml")
-            will be written.
-    """
-    lumped_spc = "lumped_species.yml"
-    src = os.path.join(os.path.dirname(__file__), lumped_spc)
-    copy = os.path.join(dst, lumped_spc)
-    if not os.path.exists(copy):
-        print(f"\nArchiving {lumped_spc} in {dst}")
-        shutil.copyfile(src, copy)
-
-
-def add_lumped_species_to_dataset(
-        ds,
-        lspc_dict=None,
-        lspc_yaml="",
-        verbose=False,
-        overwrite=False,
-        prefix="SpeciesConcVV_",
-):
-    """
-    Function to calculate lumped species concentrations and add
-    them to an xarray Dataset. Lumped species definitions may be passed
-    as a dictionary or a path to a yaml file. If neither is passed then
-    the lumped species yaml file stored in gcpy is used. This file is
-    customized for use with benchmark simuation SpeciesConc diagnostic
-    collection output.
-
-    Args:
-        ds: xarray Dataset
-            An xarray Dataset object prior to adding lumped species.
-
-    Keyword Args (optional):
-        lspc_dict: dictionary
-            Dictionary containing list of constituent species and their
-            integer scale factors per lumped species.
-            Default value: False
-        lspc_yaml: str
-            Name of the YAML file containing the list of constituent s
-            species and their integer scale factors per lumped species.
-            Default value: ""
-        verbose: bool
-            Whether to print informational output.
-            Default value: False
-        overwrite: bool
-            Whether to overwrite an existing species dataarray in a dataset
-            if it has the same name as a new lumped species. If False and
-            overlapping names are found then the function will raise an error.
-            Default value: False
-        prefix: str
-            Prefix to prepend to new lumped species names. This argument is
-            also used to extract an existing dataarray in the dataset with
-            the correct size and dimensions to use during initialization of
-            new lumped species dataarrays.
-            Default value: "SpeciesConcVV_"
-
-    Returns:
-        ds: xarray Dataset
-            A new xarray Dataset object containing all of the original
-            species plus new lumped species.
-    """
-
-    # Default is to add all benchmark lumped species.
-    # Can overwrite by passing a dictionary
-    # or a yaml file path containing one
-    assert not (
-        lspc_dict is not None and lspc_yaml != ""
-    ), "Cannot pass both lspc_dict and lspc_yaml. Choose one only."
-    if lspc_dict is None and lspc_yaml == "":
-        lspc_dict = get_lumped_species_definitions()
-    elif lspc_dict is None and lspc_yaml != "":
-        lspc_dict = read_config_file(lspc_yaml)
-
-    # Make sure attributes are transferred when copying dataset / dataarrays
-    with xr.set_options(keep_attrs=True):
-
-        # Get a dummy DataArray to use for initialization
-        dummy_darr = None
-        for var in ds.data_vars:
-            if prefix in var or prefix.replace("VV", "") in var:
-                dummy_darr = ds[var]
-                dummy_type = dummy_darr.dtype
-                dummy_shape = dummy_darr.shape
-                break
-        if dummy_darr is None:
-            msg = "Invalid prefix: " + prefix
-            raise ValueError(msg)
-
-        # Create a list with a copy of the dummy DataArray object
-        n_lumped_spc = len(lspc_dict)
-        lumped_spc = [None] * n_lumped_spc
-        for v, spcname in enumerate(lspc_dict):
-            lumped_spc[v] = dummy_darr.copy(deep=False)
-            lumped_spc[v].name = prefix + spcname
-            lumped_spc[v].values = np.full(dummy_shape, 0.0, dtype=dummy_type)
-
-        # Loop over lumped species list
-        for v, lspc in enumerate(lumped_spc):
-
-            # Search key for lspc_dict is lspc.name minus the prefix
-            c = lspc.name.find("_")
-            key = lspc.name[c+1:]
-
-            # Check if overlap with existing species
-            if lspc.name in ds.data_vars and overwrite:
-                ds.drop(lspc.name)
-            else:
-                assert(lspc.name not in ds.data_vars), \
-                    f"{lspc.name} already in dataset. To overwrite pass overwrite=True."
-
-            # Verbose prints
-            if verbose:
-                print(f"Creating {lspc.name}")
-
-            # Loop over and sum constituent species values
-            num_spc = 0
-            for _, spcname in enumerate(lspc_dict[key]):
-                varname = prefix + spcname
-                if varname not in ds.data_vars:
-                    if verbose:
-                        print(f"Warning: {varname} needed for {lspc_dict[key][spcname]} not in dataset")
-                    continue
-                if verbose:
-                    print(f" -> adding {varname} with scale {lspc_dict[key][spcname]}")
-                lspc.values += ds[varname].values * lspc_dict[key][spcname]
-                num_spc += 1
-
-            # Replace values with NaN if no species found in dataset
-            if num_spc == 0:
-                if verbose:
-                    print("No constituent species found! Setting to NaN.")
-                lspc.values = np.full(lspc.shape, np.nan)
-
-        # Insert the DataSet into the list of DataArrays
-        # so that we can only do the merge operation once
-        lumped_spc.insert(0, ds)
-        ds = xr.merge(lumped_spc)
-
-    return ds
+    return dset
 
 
 def filter_names(
@@ -1441,18 +669,17 @@ def filter_names(
             specified by the "text" argument.  If "text" is omitted,
             then the original contents of names will be returned.
     """
+    verify_variable_type(text, str)
 
     if text != "":
-        filtered_names = [k for k in names if text in k]
-    else:
-        filtered_names = [k for k in names if k]
+        return [name for name in names if text in name]
 
-    return filtered_names
+    return names
 
 
 def divide_dataset_by_dataarray(
-        ds,
-        dr,
+        dset,
+        darr,
         varlist=None
 ):
     """
@@ -1465,34 +692,29 @@ def divide_dataset_by_dataarray(
     fraction of time it was local noon in each grid box, etc.
 
     Args:
-        ds: xarray Dataset
+        dset: xarray Dataset
             The Dataset object containing variables to be divided.
-        dr: xarray DataArray
+        darr: xarray DataArray
             The DataArray object that will be used to divide the
-            variables of ds.
+            variables of dset.
 
     Keyword Args (optional):
         varlist: list of str
-            If passed, then only those variables of ds that are listed
-            in varlist will be divided by dr.  Otherwise, all variables
-            of ds will be divided by dr.
+            If passed, then only those variables of dset that are listed
+            in varlist will be divided by darr.  Otherwise, all variables
+            of dset will be divided by darr.
             Default value: None
     Returns:
-        ds_new: xarray Dataset
-            A new xarray Dataset object with its variables divided by dr.
+        dset_new: xarray Dataset
+            A new xarray Dataset object with its variables divided by darr.
     """
-
     # -----------------------------
     # Check arguments
     # -----------------------------
-    if not isinstance(ds, xr.Dataset):
-        raise TypeError("The ds argument must be of type xarray.Dataset!")
-
-    if not isinstance(dr, xr.DataArray):
-        raise TypeError("The dr argument must be of type xarray.DataArray!")
-
+    verify_variable_type(dset, xr.Dataset)
+    verify_variable_type(darr, xr.DataArray)
     if varlist is None:
-        varlist = ds.data_vars.keys()
+        varlist = dset.data_vars.keys()
 
     # -----------------------------
     # Do the division
@@ -1502,12 +724,12 @@ def divide_dataset_by_dataarray(
     with xr.set_options(keep_attrs=True):
 
         # Loop over variables
-        for v in varlist:
+        for var in varlist:
 
-            # Divide each variable of ds by dr
-            ds[v] = ds[v] / dr
+            # Divide each variable of dset by darr
+            dset[var] = dset[var] / darr
 
-    return ds
+    return dset
 
 
 def get_shape_of_data(
@@ -1537,7 +759,7 @@ def get_shape_of_data(
 
     Returns:
         shape: tuple of int
-            Tuple containing the sizes of each dimension of dr in order:
+            Tuple containing the sizes of each dimension of darr in order:
             (time, lev|ilev, nf, lat|YDim, lon|XDim).
         dims: list of str
             If return_dims is True, then dims will contain a list of
@@ -1565,10 +787,10 @@ def get_shape_of_data(
 
     # Return a tuple with the shape of each dimension (and also a
     # list of each dimension if return_dims is True).
-    for d in dimlist:
-        if d in sizelist:
-            shape += (sizelist[d],)
-            dims.append(d)
+    for dim in dimlist:
+        if dim in sizelist:
+            shape += (sizelist[dim],)
+            dims.append(dim)
 
     if return_dims:
         return shape, dims
@@ -1576,7 +798,7 @@ def get_shape_of_data(
 
 
 def get_area_from_dataset(
-        ds
+        dset
 ):
     """
     Convenience routine to return the area variable (which is
@@ -1584,17 +806,17 @@ def get_area_from_dataset(
     for GCHP) from an xarray Dataset object.
 
     Args:
-        ds: xarray Dataset
+        dset: xarray Dataset
             The input dataset.
     Returns:
         area_m2: xarray DataArray
-            The surface area in m2, as found in ds.
+            The surface area in m2, as found in dset.
     """
 
-    if "Met_AREAM2" in ds.data_vars.keys():
-        return ds["Met_AREAM2"]
-    if "AREA" in ds.data_vars.keys():
-        return ds["AREA"]
+    if "Met_AREAM2" in dset.data_vars.keys():
+        return dset["Met_AREAM2"]
+    if "AREA" in dset.data_vars.keys():
+        return dset["AREA"]
     msg = (
         'An area variable ("AREA" or "Met_AREAM2" is missing'
         + " from this dataset!"
@@ -1603,7 +825,7 @@ def get_area_from_dataset(
 
 
 def get_variables_from_dataset(
-        ds,
+        dset,
         varlist
 ):
     """
@@ -1612,13 +834,13 @@ def get_variables_from_dataset(
     found in the Dataset, or else an error will be raised.
 
     Args:
-        ds: xarray Dataset
+        dset: xarray Dataset
             The input dataset.
         varlist: list of str
-            List of DataArray variables to extract from ds.
+            List of DataArray variables to extract from dset.
 
     Returns:
-        ds_subset: xarray Dataset
+        dset_subset: xarray Dataset
             A new data set containing only the variables
             that were requested.
 
@@ -1627,15 +849,15 @@ def get_variables_from_dataset(
     variables to be returned.  Otherwise
     """
 
-    ds_subset = xr.Dataset()
-    for v in varlist:
-        if v in ds.data_vars.keys():
-            ds_subset = xr.merge([ds_subset, ds[v]])
+    dset_subset = xr.Dataset()
+    for var in varlist:
+        if var in dset.data_vars.keys():
+            dset_subset = xr.merge([dset_subset, dset[var]])
         else:
-            msg = f"{v} was not found in this dataset!"
+            msg = f"{var} was not found in this dataset!"
             raise ValueError(msg)
 
-    return ds_subset
+    return dset_subset
 
 
 def create_blank_dataarray(
@@ -1648,7 +870,7 @@ def create_blank_dataarray(
         vertical_dim="lev"
 ):
     """
-    Given an xarray DataArray dr, returns a DataArray object with
+    Given an xarray DataArray darr, returns a DataArray object with
     the same dimensions, coordinates, attributes, and name, but
     with its data set to missing values (default=NaN) everywhere.
     This is useful if you need to plot or compare two DataArray
@@ -1661,15 +883,15 @@ def create_blank_dataarray(
         Dictionary of the dimension names and their sizes (e.g.
         {'time': 1 ', 'lev': 72, ...} that will be used to create
         the DataArray of NaNs.  This can be obtained from an
-        xarray Dataset as ds.sizes.
-    coords: dict of lists of float
+        xarray Dataset as dset.sizes.
+    coordset: dict of lists of float
         Dictionary containing the coordinate variables that will
         be used to create the DataArray of NaNs.  This can be obtained
-        from an xarray Dataset with ds.coords.
+        from an xarray Dataset with dset.coordset.
     attrs: dict of str
         Dictionary containing the DataArray variable attributes
         (such as "units", "long_name", etc.).  This can be obtained
-        from an xarray Dataset with dr.attrs.
+        from an xarray Dataset with darr.attrs.
     fill_value: np.nan or numeric type
         Value with which the DataArray object will be filled.
         Default value: np.nan
@@ -1681,7 +903,7 @@ def create_blank_dataarray(
         Default: "lev"
 
     Returns:
-    dr: xarray DataArray
+    darr: xarray DataArray
         The output DataArray object, which will be set to the value
         specified by the fill_value argument everywhere.
     """
@@ -1723,7 +945,7 @@ def create_blank_dataarray(
 
 
 def check_for_area(
-        ds,
+        dset,
         gcc_area_name="AREA",
         gchp_area_name="Met_AREAM2"
 ):
@@ -1737,7 +959,7 @@ def check_for_area(
     GEOS-Chem "Classic" area name if it is present.
 
     Args:
-        ds: xarray Dataset
+        dset: xarray Dataset
             The Dataset object that will be checked.
 
     Keyword Args (optional):
@@ -1750,230 +972,21 @@ def check_for_area(
             Default value: "Met_AREAM2"
 
     Returns:
-        ds: xarray Dataset
+        dset: xarray Dataset
             The modified Dataset object
     """
 
-    found_gcc = gcc_area_name in ds.data_vars.keys()
-    found_gchp = gchp_area_name in ds.data_vars.keys()
+    found_gcc = gcc_area_name in dset.data_vars.keys()
+    found_gchp = gchp_area_name in dset.data_vars.keys()
 
     if (not found_gcc) and (not found_gchp):
         msg = f"Could not find {gcc_area_name} or {gchp_area_name} in the dataset!"
         raise ValueError(msg)
 
     if found_gchp:
-        ds[gcc_area_name] = ds[gchp_area_name]
+        dset[gcc_area_name] = dset[gchp_area_name]
 
-    return ds
-
-
-def get_filepath(
-        datadir,
-        col,
-        date,
-        is_gchp=False,
-        gchp_res="c00",
-        gchp_is_pre_14_0=False
-):
-    """
-    Routine to return file path for a given GEOS-Chem "Classic"
-    (aka "GCC") or GCHP diagnostic collection and date.
-
-    Args:
-        datadir: str
-            Path name of the directory containing GCC or GCHP data files.
-        col: str
-            Name of collection (e.g. Emissions, SpeciesConc, etc.)
-            for which file path will be returned.
-        date: numpy.datetime64
-            Date for which file paths are requested.
-
-    Keyword Args (optional):
-        is_gchp: bool
-            Set this switch to True to obtain file pathnames to
-            GCHP diagnostic data files. If False, assumes GEOS-Chem "Classic"
-
-        gchp_res: str
-            Cubed-sphere resolution of GCHP data grid.
-            Only needed for restart files.
-            Default value: "c00".
-
-        gchp_is_pre_14_0: bool
-            Set this switch to True to obtain GCHP file pathnames used in
-            versions before 14.0. Only needed for restart files.
-
-    Returns:
-        path: str
-            Pathname for the specified collection and date.
-    """
-
-    # Set filename template, extension, separator, and date string from
-    # the collection, date, and data directory arguments
-    separator = "_"
-    extension = "z.nc4"
-    date_str = np.datetime_as_string(date, unit="m")
-    if is_gchp:
-        if "Restart" in col:
-            extension = ".nc4"
-            date_str = np.datetime_as_string(date, unit="s")
-            if gchp_is_pre_14_0:
-                file_tmpl = os.path.join(
-                    datadir,
-                    "gcchem_internal_checkpoint.restart."
-                )
-            else:
-                file_tmpl = os.path.join(
-                    datadir,
-                    "GEOSChem.Restart."
-                )
-        else:
-            file_tmpl = os.path.join(datadir, f"GEOSChem.{col}.")
-    else:
-        if "Emissions" in col:
-            file_tmpl = os.path.join(datadir, "HEMCO_diagnostics.")
-            extension = ".nc"
-            separator = ""
-        elif "Restart" in col:
-            file_tmpl = os.path.join(datadir, "GEOSChem.Restart.")
-        else:
-            file_tmpl = os.path.join(datadir, f"GEOSChem.{col}.")
-    if isinstance(date_str, np.str_):
-        date_str = str(date_str)
-    date_str = date_str.replace("T", separator)
-    date_str = date_str.replace("-", "")
-    date_str = date_str.replace(":", "")
-
-    # Set file path. Include grid resolution if GCHP restart file.
-    path = file_tmpl + date_str + extension
-    if is_gchp and "Restart" in col and not gchp_is_pre_14_0:
-        path = file_tmpl + date_str[:len(date_str)-2] + "z." + gchp_res + extension
-
-    return path
-
-
-def get_filepaths(
-        datadir,
-        collections,
-        dates,
-        is_gchp=False,
-        gchp_res="c00",
-        gchp_is_pre_14_0=False
-):
-    """
-    Routine to return filepaths for a given GEOS-Chem "Classic"
-    (aka "GCC") or GCHP diagnostic collection.
-
-    Args:
-        datadir: str
-            Path name of the directory containing GCC or GCHP data files.
-        collections: list of str
-            Names of collections (e.g. Emissions, SpeciesConc, etc.)
-            for which file paths will be returned.
-        dates: array of numpy.datetime64
-            Array of dates for which file paths are requested.
-
-    Keyword Args (optional):
-        is_gchp: bool
-            Set this switch to True to obtain file pathnames to
-            GCHP diagnostic data files. If False, assumes GEOS-Chem "Classic"
-
-        gchp_res: str
-            Cubed-sphere resolution of GCHP data grid.
-            Only needed for restart files.
-            Default value: "c00".
-
-        gchp_is_pre_14_0: bool
-            Set this switch to True to obtain GCHP file pathnames used in
-            versions before 14.0. Only needed for diagnostic files.
-
-    Returns:
-        paths: 2D list of str
-            A list of pathnames for each specified collection and date.
-            First dimension is collection, and second is date.
-    """
-
-    # ==================================================================
-    # Initialization
-    # ==================================================================
-
-    # If collections is passed as a scalar
-    # make it a list so that we can iterate
-    if not isinstance(collections, list):
-        collections = [collections]
-
-    # Create the return variable
-    rows, cols = (len(collections), len(dates))
-    paths = [[''] * cols] * rows
-
-    # ==================================================================
-    # Create the file list
-    # ==================================================================
-    for c, collection in enumerate(collections):
-
-        separator = "_"
-        extension = "z.nc4"
-        if is_gchp:
-            # ---------------------------------------
-            # Get the file path template for GCHP
-            # ---------------------------------------
-            if "Restart" in collection:
-                extension = ".nc4"
-                if gchp_is_pre_14_0:
-                    file_tmpl = os.path.join(
-                        datadir,
-                        "gcchem_internal_checkpoint.restart."
-                    )
-                else:
-                    file_tmpl = os.path.join(
-                        datadir,
-                        "GEOSChem.Restart."
-                    )
-            else:
-                file_tmpl = os.path.join(
-                    datadir,
-                    f"GEOSChem.{collection}."
-                )
-        else:
-            # ---------------------------------------
-            # Get the file path template for GCC
-            # ---------------------------------------
-            if "Emissions" in collection:
-                file_tmpl = os.path.join(
-                    datadir,
-                    "HEMCO_diagnostics."
-                )
-                separator = ""
-                extension = ".nc"
-            elif "Restart" in collection:
-                file_tmpl = os.path.join(
-                    datadir,
-                    "GEOSChem.Restart."
-                )
-
-            else:
-                file_tmpl = os.path.join(
-                    datadir,
-                    f"GEOSChem.{collection}."
-                )
-
-        # --------------------------------------------
-        # Create a list of files for each date/time
-        # --------------------------------------------
-        for d, date in enumerate(dates):
-            if is_gchp and "Restart" in collection:
-                date_time = str(np.datetime_as_string(date, unit="s"))
-            else:
-                date_time = str(np.datetime_as_string(date, unit="m"))
-            date_time = date_time.replace("T", separator)
-            date_time = date_time.replace("-", "")
-            date_time = date_time.replace(":", "")
-
-            # Set file path. Include grid resolution if GCHP restart file.
-            paths[c][d] = file_tmpl + date_time + extension
-            if is_gchp and "Restart" in collection and not gchp_is_pre_14_0:
-                paths[c][d] = file_tmpl + date_time[:len(date_time)-2] + "z." + gchp_res + extension
-
-    return paths
+    return dset
 
 
 def extract_pathnames_from_log(
@@ -2005,11 +1018,11 @@ def extract_pathnames_from_log(
     data_list = set()  # only keep unique files
 
     # Open file
-    with open(filename, "r") as f:
+    with open(filename, "r", encoding='UTF-8') as input_file:
 
         # Read data from the file line by line.
         # Add file paths to the data_list set.
-        line = f.readline()
+        line = input_file.readline()
         while line:
             upcaseline = line.upper()
             if (": OPENING" in upcaseline) or (": READING" in upcaseline):
@@ -2020,80 +1033,13 @@ def extract_pathnames_from_log(
                     data_list.add(trimmed_path)
 
             # Read next line
-            line = f.readline()
+            line = input_file.readline()
 
         # Close file and return
-        f.close()
+        input_file.close()
 
     data_list = sorted(list(data_list))
     return data_list
-
-
-def get_gcc_filepath(
-        outputdir,
-        collection,
-        day,
-        time
-):
-    '''
-    Routine for getting filepath of GEOS-Chem Classic output
-
-    Args:
-        outputdir: str
-             Path of the OutputDir directory
-        collection: str
-             Name of output collection, e.g. Emissions or SpeciesConc
-        day: str
-             Number day of output, e.g. 31
-        time: str
-             Z time of output, e.g. 1200z
-
-    Returns:
-        filepath: str
-             Path of requested file
-    '''
-    if collection == "Emissions":
-        filepath = os.path.join(
-            outputdir,
-            f"HEMCO_diagnostics.{day}{time}.nc"
-        )
-    else:
-        filepath = os.path.join(
-            outputdir,
-            f"GEOSChem.{collection}.{day}_{time}z.nc4"
-        )
-    return filepath
-
-
-def get_gchp_filepath(
-        outputdir,
-        collection,
-        day,
-        time
-):
-    '''
-    Routine for getting filepath of GCHP output
-
-    Args:
-        outputdir: str
-             Path of the OutputDir directory
-        collection: str
-             Name of output collection, e.g. Emissions or SpeciesConc
-        day: str
-             Number day of output, e.g. 31
-        time: str
-             Z time of output, e.g. 1200z
-
-    Returns:
-        filepath: str
-             Path of requested file
-    '''
-
-    filepath = os.path.join(
-        outputdir,
-        f"GCHP.{collection}.{day}_{time}z.nc4"
-    )
-    return filepath
 
 
 def get_nan_mask(
@@ -2119,25 +1065,25 @@ def get_nan_mask(
 
 
 def all_zero_or_nan(
-        ds
+        dset
 ):
     """
-    Return whether ds is all zeros, or all nans
+    Return whether dset is all zeros, or all nans
 
     Args:
-        ds: numpy array
+        dset: numpy array
             Input GEOS-Chem data
     Returns:
         all_zero, all_nan: bool, bool
-            all_zero is whether ds is all zeros,
-            all_nan  is whether ds is all NaNs
+            all_zero is whether dset is all zeros,
+            all_nan  is whether dset is all NaNs
     """
 
-    return not np.any(ds), np.isnan(ds).all()
+    return not np.any(dset), np.isnan(dset).all()
 
 
 def dataset_mean(
-        ds,
+        dset,
         dim="time",
         skipna=True
 ):
@@ -2145,7 +1091,7 @@ def dataset_mean(
     Convenience wrapper for taking the mean of an xarray Dataset.
 
     Args:
-       ds : xarray Dataset
+       dset : xarray Dataset
            Input data
 
     Keyword Args:
@@ -2157,18 +1103,18 @@ def dataset_mean(
            Default: True
 
     Returns:
-       ds_mean : xarray Dataset or None
+       dset_mean : xarray Dataset or None
            Dataset containing mean values
-           Will return None if ds is not defined
+           Will return None if dset is not defined
     """
-    if ds is None:
-        return ds
+    if dset is None:
+        return dset
 
-    if not isinstance(ds, xr.Dataset):
-        raise ValueError("Argument ds must be None or xarray.Dataset!")
+    if not isinstance(dset, xr.Dataset):
+        raise ValueError("Argument dset must be None or xarray.Dataset!")
 
     with xr.set_options(keep_attrs=True):
-        return ds.mean(dim=dim, skipna=skipna)
+        return dset.mean(dim=dim, skipna=skipna)
 
 
 def dataset_reader(
@@ -2235,17 +1181,15 @@ def unique_values(
     unique: list
         List of unique values from this_list
     """
-    if not isinstance(this_list, list):
-        raise ValueError("Argument 'this_list' must be a list object!")
-    if not isinstance(drop, list):
-        raise ValueError("Argument 'drop' must be a list object!")
+    verify_variable_type(this_list, list)
+    verify_variable_type(drop, list)
 
     unique = list(set(this_list))
 
     if drop is not None:
-        for d in drop:
-            if d in unique:
-                unique.remove(d)
+        for drop_val in drop:
+            if drop_val in unique:
+                unique.remove(drop_val)
 
     unique.sort()
 
@@ -2306,13 +1250,8 @@ def insert_text_into_file(
     width: int
         Will "word-wrap" the text in 'replace_text' to this width
     """
-    if not isinstance(search_text, str):
-        raise ValueError("Argument 'search_text' needs to be a string!")
-    if not isinstance(replace_text, str) and \
-       not isinstance(replace_text, list):
-        raise ValueError(
-            "Argument 'replace_text' needs to be a list or a string"
-        )
+    verify_variable_type(search_text, str)
+    verify_variable_type(replace_text, (str, list))
 
     # Word-wrap the replacement text
     # (does list -> str conversion if necessary)
@@ -2321,18 +1260,18 @@ def insert_text_into_file(
         width=width
     )
 
-    with open(filename, "r") as f:
-        filedata = f.read()
-        f.close()
+    with open(filename, "r", encoding="UTF-8") as input_file:
+        filedata = input_file.read()
+        input_file.close()
 
     filedata = filedata.replace(
         search_text,
         replace_text
     )
 
-    with open(filename, "w") as f:
-        f.write(filedata)
-        f.close()
+    with open(filename, "w", encoding="UTF-8") as output_file:
+        output_file.write(filedata)
+        output_file.close()
 
 
 def array_equals(
@@ -2395,6 +1334,7 @@ def make_directory(
         Set to True if you wish to overwrite prior contents in
         the directory 'dir_name'
     """
+    verify_variable_type(dir_name, str)
 
     if os.path.isdir(dir_name) and not overwrite:
         msg = f"Directory {dir_name} exists!\n"
@@ -2403,28 +1343,6 @@ def make_directory(
 
     if not os.path.isdir(dir_name):
         os.makedirs(dir_name)
-
-
-def trim_cloud_benchmark_label(
-        label
-):
-    """
-    Removes the first part of the cloud benchmark label string
-    (e.g. "gchp-c24-1Hr", "gcc-4x5-1Mon", etc) to avoid clutter.
-    """
-    if not isinstance(label, str):
-        raise ValueError("Argument 'label' must be a string!")
-
-    for v in [
-        "gcc-4x5-1Hr",
-        "gchp-c24-1Hr",
-        "gcc-4x5-1Mon",
-        "gchp-c24-1Mon",
-    ]:
-        if v in label:
-            label.replace(v, "")
-
-    return label
 
 
 def verify_variable_type(

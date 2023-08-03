@@ -48,6 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Moved `GC_72_vertical_levels.csv` from `benchmark/modules/` to `benchmark/config/`
 - Moved `benchmark/modules/species_database.yml` to `benchmark/config/species_database.yml`
 - Moved benchmark python scripts from `gcpy/` to  the `benchmark/modules/` folder
+- `gcpy/util.py` now contains only general utility functions and was linted with Pylint.
 
 ### Fixed
 - Generalized test for GCHP or GCClassic restart file in `regrid_restart_file.py`
