@@ -15,25 +15,24 @@
 # You can modify the SLURM parameters above for your setup.
 #============================================================================
 
-# Apply all bash initialization settings
+# Need to initialize the bash shell so we find the conda environment
 . ~/.bashrc
 
 # Make sure to set multiple threads; Joblib will use multiple
 # cores to parallelize certain plotting operations.
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export OMP_NUM_THREADS=12
 export OMP_STACKSIZE=500m
 
 # Turn on Python environment (edit for your setup)
-conda activate gcpy
+conda activate gcpy_env
 
-# Uncomment this line to make 1-month benchmark plots & tables
-./run_benchmark.py 1mo_benchmark.yml > plots_1mo.log
+# Pick the config file for the type of benchmark you are doing
+config_file="1mo_benchmark.yml"
+#config_file="1yr_fullchem_benchmark_yml"
+#config_file="1yr_tt_benchmark.yml"
 
-# Uncomment this line to make 1-year benchmark plots & tables
-# ./run_benchmark.py 1yr_fullchem_benchmark.yml > plots_1yr_fullchem.log
-
-# Uncomment this line to make 1-year TransportTracers plots & tables
-# ./run_benchmark.py 1yr_tt_benchmark.yml > plots_1yr_tt.log
+# Generate the plots
+./run_benchmark.py ${config_file} > bmk.log 2>&1
 
 # Turn off python environment
 conda deactivate
